@@ -68,6 +68,8 @@ object ObjectiveTools {
     fun getToolInfos(): List<ToolInfo> = listOf(
         ToolInfo(
             id = "objective_set_status",
+            name = "Objective status",
+            description = "Report objective-mode progress to Re-Kai",
             nameRes = Res.string.tool_objective_set_status_name,
             descriptionRes = Res.string.tool_objective_set_status_description,
             userToggleable = false,
