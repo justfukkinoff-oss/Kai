@@ -44,7 +44,7 @@ internal fun IntegrationsContent(
     val uriHandler = LocalUriHandler.current
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         SettingsCard {
-            GitHubSection(appSettings = inject(AppSettings::class.java).value)
+            GitHubSection(appSettings = inject<AppSettings>(AppSettings::class.java).value)
         }
         if (splinterlandsState.showSplinterlandsSection) {
             SettingsCard {
