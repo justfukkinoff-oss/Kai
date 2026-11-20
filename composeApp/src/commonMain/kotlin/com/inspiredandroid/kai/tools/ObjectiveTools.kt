@@ -21,7 +21,7 @@ import org.koin.core.component.inject
  * different chat.
  */
 object ObjectiveStatusTool : Tool, KoinComponent {
-    private val objectiveStore: ObjectiveStore by inject(ObjectiveStore::class.java)
+    private val objectiveStore: ObjectiveStore by inject()
 
     override val schema = ToolSchema(
         name = "objective_set_status",

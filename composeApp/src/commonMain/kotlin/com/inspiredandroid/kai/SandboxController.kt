@@ -176,6 +176,13 @@ interface SandboxController : FileBrowserSource {
      * trim so the transcript settles back to its cap.
      */
     fun setTranscriptInteractive(sessionId: String, interacting: Boolean) {}
+
+    /**
+     * Write raw binary bytes to a guest path in the sandbox (uploaded files into
+     * /root/chat-uploads, downloaded artifacts into /root/artifacts). Platforms
+     * without a sandbox return false.
+     */
+    suspend fun writeBinaryFile(path: String, bytes: ByteArray): Boolean = false
 }
 
 /** The sandbox is Android-only; every other target gets this. */

@@ -66,7 +66,7 @@ object GitHubActionsTools {
     fun resolveToken(appSettings: AppSettings, mcpServerManager: McpServerManager): String? {
         appSettings.getGithubToken().takeIf { it.isNotBlank() }?.let { return it }
         val server = mcpServerManager.getServersJson()
-            ?.firstOrNull { it.enabled && it.url.contains(COPILOT_MCP_HOST) } ?: return null
+            ?.firstOrNull { it.isEnabled && it.url.contains(COPILOT_MCP_HOST) } ?: return null
         val auth = server.headers.entries
             .firstOrNull { it.key.equals(HttpHeaders.Authorization, ignoreCase = true) }
             ?.value ?: return null
@@ -445,9 +445,11 @@ object GitHubActionsTools {
 
     // Helpers that tools call through the object: token resolution, errors, API wrapper.
 
-    private val appSettings: AppSettings by lazy { org.koin.java.KoinJavaComponent.inject(AppSettings::class.java).value }
+    private val appSettings: AppSettings by lazy {
+        org.koin.java.KoinJavaComponent.inject<AppSettings>(AppSettings::class.java).value
+    }
     private val mcpServerManager: McpServerManager by lazy {
-        org.koin.java.KoinJavaComponent.inject(McpServerManager::class.java).value
+        org.koin.java.KoinJavaComponent.inject<McpServerManager>(McpServerManager::class.java).value
     }
 
     fun tokenOrError(): String? = resolveToken(appSettings, mcpServerManager)
