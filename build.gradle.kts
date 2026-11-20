@@ -14,19 +14,17 @@ configure<com.diffplug.gradle.spotless.SpotlessExtension> {
     kotlin {
         target("**/*.kt")
         targetExclude("**/build/**")
-        ktlint {
-            editorConfigOverride(
-                mapOf(
-                    "ktlint_standard_no-wildcard-imports" to "disabled",
-                    "ktlint_standard_package-name" to "disabled",
-                    "ktlint_standard_function-naming" to "disabled",
-                    "ktlint_standard_discouraged-comment-location" to "disabled",
-                    "ktlint_standard_value-argument-comment" to "disabled",
-                    "ktlint_standard_value-parameter-comment" to "disabled",
-                    "ktlint_standard_kdoc" to "disabled",
-                ),
-            )
-        }
+        ktlint().editorConfigOverride(
+            mapOf(
+                "ktlint_standard_no-wildcard-imports" to "disabled",
+                "ktlint_standard_package-name" to "disabled",
+                "ktlint_standard_function-naming" to "disabled",
+                "ktlint_standard_discouraged-comment-location" to "disabled",
+                "ktlint_standard_value-argument-comment" to "disabled",
+                "ktlint_standard_value-parameter-comment" to "disabled",
+                "ktlint_standard_kdoc" to "disabled",
+            ),
+        )
     }
     kotlinGradle {
         target("**/*.gradle.kts")
