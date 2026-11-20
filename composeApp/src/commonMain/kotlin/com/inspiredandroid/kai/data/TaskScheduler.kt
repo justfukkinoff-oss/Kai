@@ -194,6 +194,7 @@ class TaskScheduler(
                         sendHeartbeatNotification(
                             title = "Re-Kai heartbeat",
                             body = preview,
+                        )
                     }
                 }
             }
