@@ -43,6 +43,10 @@ All are registered by the platform layer (`Platform.android.kt` / `Platform.jvm.
 | `gha_list_artifacts` | `owner`, `repo`, `run_id` | Artifacts of a run (id, name, size, expiry) |
 | `gha_download_artifact` | `owner`, `repo`, `artifact_id`, `artifact_name` | Streams the artifact zip to the sink and reports the path |
 
+## Bundled workflow
+
+The repo ships `.github/workflows/debug-apk.yml` — a `workflow_dispatch` build that assembles the FOSS debug APK with the default debug/test key and `-Prekai.arm64Only=true`, so the tools above can trigger and download a single arm64-v8a APK (artifact `Re-Kai-debug-arm64`). Passing the property enables an ABI split on `androidApp` that emits only `arm64-v8a` and no universal APK; local builds without the property are unchanged.
+
 ## Key Files
 
 | File | Purpose |

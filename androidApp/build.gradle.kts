@@ -78,6 +78,19 @@ android {
         buildConfig = true
     }
 
+    // CI debug builds pass -Prekai.arm64Only to emit a single arm64-v8a APK instead of
+    // the universal one; local builds are unaffected.
+    if (project.hasProperty("rekai.arm64Only")) {
+        splits {
+            abi {
+                isEnable = true
+                reset()
+                include("arm64-v8a")
+                isUniversalApk = false
+            }
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
