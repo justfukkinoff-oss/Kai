@@ -1,6 +1,6 @@
 # Chat & Conversations
 
-**Last verified:** 2026-10-02
+**Last verified:** 2026-11-20
 
 Kai's chat system manages the message history, conversation persistence, file attachments, and speech output. Conversations are service-independent — switching providers does not affect which conversation is loaded or restored. Multiple conversations are persisted and browsable via a history sheet.
 
@@ -90,12 +90,38 @@ Multiple files can be attached to a single prompt. Each file is added one at a t
 - Sent as a `document` block (Anthropic) or `inline_data` (Gemini). On the OpenAI-compatible wire path (OpenAI, OpenRouter, and other OpenAI-compatible services), PDF binaries are currently dropped from the request body — only image parts are encoded as `image_url` — so a PDF attach on OpenAI/OpenRouter is accepted by the UI but not transmitted to the model
 - Shown as a filename chip in the user message bubble
 
+### Binary files
+- Extended extension list (`binaryExtensions`): `.zip`, `.apk`, `.aab`, `.apks`, `.apkm`, `.xapk`, `.jar`, `.dex`, `.so`, `.arsc`, `.ipa`, common archives, keystores, and native libraries
+- Maximum size: 200 MB (MAX_BINARY_FILE_BYTES)
+- Binary attachments are **not sent to the model** — the bytes are written into the Linux sandbox at `/root/chat-uploads/<filename>` via `SandboxController.writeBinaryFile`, and the user message instead carries a note naming the sandbox path and telling the agent to inspect the file there with shell tools (the `apk-rework` built-in skill covers APK/AAB re-engineering)
+- Available on Android only (they require the sandbox); the picker is unrestricted so any MIME type can be attached
+
 ### General behavior
-- The attachment button is shown whenever the active service supports file attachments (text files work with all remote models); it is hidden when the active service runs on-device, since on-device services do not support attachments
-- Unsupported file types (e.g., `.zip`) show an error message
+- The attachment button is shown whenever the active service supports any file category — text files work with all remote models, binary files need the Android sandbox
+- It is hidden when the active service runs on-device, since on-device services do not support attachments
+- File types outside the supported extension list show an error message
 - Files exceeding the per-category size limit show a size error; size is checked by stat before the file is read, so multi-gigabyte attachments are rejected without allocating memory for the full contents
 - Long filenames in chips are truncated with an ellipsis while preserving the extension
 - File attachments persist across conversation save/restore via an `attachments` list on each message; older conversations saved with a single-file schema are migrated on load. An attachment large enough to push its message past the storage cap is dropped from the saved copy (see [Conversation Storage](#conversation-storage)) — the message text stays
+
+## Chat / Plan / Build modes
+
+The composer shows a chip row above the input — **Chat**, **Plan**, **Build**, and **Objective**. The first three select a chat mode persisted in app settings and injected into every system prompt via `buildChatSystemPrompt(mode = …)`:
+
+- **Chat** — default; no extra section
+- **Plan** — appends the Plan-mode section: analyse and produce a plan, run **no side-effecting tools**, do not modify the workspace
+- **Build** — appends the Build-mode section: work in the sandbox workspace (`/root/chat-uploads` inputs, `/root/artifacts` outputs) and delegate heavy compile/sign steps to **GitHub Actions** instead of building inside proot
+
+The mode is global (not per conversation). See [system-prompts.md](system-prompts.md).
+
+## Objective mode
+
+**Objective** in the chip row opens a dialog where the user states a final goal. The current conversation becomes an objective conversation (persisted type `objective`, titled with the goal):
+
+- A banner below the heartbeat banner shows the goal, the latest status/summary, and pause / resume / remove controls
+- `ObjectiveManager`, driven by the scheduler loop, periodically runs continuation prompts on the objective conversation — independent of which chat is open — until the agent reports `objective_set_status(done)` or the run fails (10-minute retry backoff, 20-minute per-run timeout)
+- Continuation runs respect the heartbeats-only-when-idle rule: the manager is invoked with the loading state and skips while the user is actively chatting
+- The agent self-reports progress with the `objective_set_status` tool. Details: [objective.md](objective.md)
 
 ## Speech Output (TTS)
 
@@ -124,7 +150,8 @@ Multiple files can be attached to a single prompt. Each file is added one at a t
 - **Input**: text field, send/stop button, attachment button, file chip
 - **Empty state**: animated logo + welcome message
 - **Drag-and-drop**: supported for file attachments
-- **History sheet**: bottom sheet listing saved conversations with title, date, active highlight, and delete
+- **History sheet**: bottom sheet listing saved conversations with title, date, active highlight, and delete; objective conversations carry an **Objective** badge next to their goal-derived title
+- **Mode chips**: Chat / Plan / Build / Objective chip row above the composer; the objective banner appears below the heartbeat banner while objective mode is active
 
 ## Key Files
 

@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.DisableSelection
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SuggestionChip
@@ -58,6 +59,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.inspiredandroid.kai.Platform
 import com.inspiredandroid.kai.currentPlatform
+import com.inspiredandroid.kai.data.ChatMode
 import com.inspiredandroid.kai.data.ServiceEntry
 import com.inspiredandroid.kai.data.imageExtensions
 import com.inspiredandroid.kai.skills.SkillManifest
@@ -73,6 +75,10 @@ import kai.composeapp.generated.resources.Res
 import kai.composeapp.generated.resources.ic_attach
 import kai.composeapp.generated.resources.ic_file
 import kai.composeapp.generated.resources.ic_image
+import kai.composeapp.generated.resources.chat_mode_build
+import kai.composeapp.generated.resources.chat_mode_chat
+import kai.composeapp.generated.resources.chat_mode_plan
+import kai.composeapp.generated.resources.chat_objective_mode
 import kai.composeapp.generated.resources.ic_stop
 import kai.composeapp.generated.resources.ic_up
 import kai.composeapp.generated.resources.prompt_ask_question
@@ -97,9 +103,46 @@ fun QuestionInput(
     availableServices: ImmutableList<ServiceEntry> = persistentListOf(),
     onSelectService: (String) -> Unit = {},
     installedSkills: ImmutableList<SkillManifest> = persistentListOf(),
+    chatMode: ChatMode? = null,
+    onChatModeSelect: (ChatMode) -> Unit = {},
+    objectiveMode: Boolean = false,
+    onOpenObjective: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier) {
+        if (chatMode != null) {
+            FlowRow(
+                modifier = Modifier
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                for (mode in ChatMode.entries) {
+                    FilterChip(
+                        modifier = Modifier.handCursor(),
+                        selected = mode == chatMode,
+                        onClick = { onChatModeSelect(mode) },
+                        label = {
+                            Text(
+                                text = stringResource(
+                                    when (mode) {
+                                        ChatMode.CHAT -> Res.string.chat_mode_chat
+                                        ChatMode.PLAN -> Res.string.chat_mode_plan
+                                        ChatMode.BUILD -> Res.string.chat_mode_build
+                                    },
+                                ),
+                            )
+                        },
+                    )
+                }
+                FilterChip(
+                    modifier = Modifier.handCursor(),
+                    selected = objectiveMode,
+                    onClick = onOpenObjective,
+                    label = { Text(stringResource(Res.string.chat_objective_mode)) },
+                )
+            }
+        }
         // Slash autocomplete: shown when the user is typing the first token and it starts
         // with `/`. Selecting an entry rewrites the first token to the canonical skill id
         // so the ViewModel can match it at send time.

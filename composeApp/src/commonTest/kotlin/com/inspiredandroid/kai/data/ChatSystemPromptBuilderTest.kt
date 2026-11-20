@@ -672,4 +672,97 @@ class ChatSystemPromptBuilderTest {
     }
 
     // endregion
+
+    // region Chat modes + Objective
+
+    @Test
+    fun `CHAT mode renders zero mode bytes by default`() {
+        val out = build(SystemPromptVariant.CHAT_REMOTE)
+        assertFalse("## Active Mode" in out)
+    }
+
+    @Test
+    fun `PLAN mode renders the plan-only section`() {
+        val out = buildChatSystemPrompt(
+            variant = SystemPromptVariant.CHAT_REMOTE,
+            soul = "You are Kai.",
+            hasTools = true,
+            memoryEnabled = true,
+            schedulingEnabled = true,
+            memoryInstructions = null,
+            generalMemories = emptyList(),
+            preferenceMemories = emptyList(),
+            learningMemories = emptyList(),
+            errorMemories = emptyList(),
+            pendingTasks = emptyList(),
+            heartbeatAdditions = emptyList(),
+            emailAccounts = emptyList(),
+            runtime = runtime,
+            uiMode = ChatPromptUiMode.NONE,
+            mode = ChatMode.PLAN,
+        )
+        assertTrue("## Active Mode: Plan" in out)
+        assertFalse("## Active Mode: Build" in out)
+    }
+
+    @Test
+    fun `BUILD mode renders the workspace and GitHub Actions section`() {
+        val out = buildChatSystemPrompt(
+            variant = SystemPromptVariant.CHAT_REMOTE,
+            soul = "You are Kai.",
+            hasTools = true,
+            memoryEnabled = true,
+            schedulingEnabled = true,
+            memoryInstructions = null,
+            generalMemories = emptyList(),
+            preferenceMemories = emptyList(),
+            learningMemories = emptyList(),
+            errorMemories = emptyList(),
+            pendingTasks = emptyList(),
+            heartbeatAdditions = emptyList(),
+            emailAccounts = emptyList(),
+            runtime = runtime,
+            uiMode = ChatPromptUiMode.NONE,
+            mode = ChatMode.BUILD,
+        )
+        assertTrue("## Active Mode: Build" in out)
+        assertTrue("/root/chat-uploads" in out)
+        assertTrue("GitHub Actions" in out)
+    }
+
+    @Test
+    fun `Objective section is absent by default and present when an objective is set`() {
+        val without = build(SystemPromptVariant.CHAT_REMOTE)
+        assertFalse("## Objective" in without)
+
+        val with = buildChatSystemPrompt(
+            variant = SystemPromptVariant.CHAT_REMOTE,
+            soul = "You are Kai.",
+            hasTools = true,
+            memoryEnabled = true,
+            schedulingEnabled = true,
+            memoryInstructions = null,
+            generalMemories = emptyList(),
+            preferenceMemories = emptyList(),
+            learningMemories = emptyList(),
+            errorMemories = emptyList(),
+            pendingTasks = emptyList(),
+            heartbeatAdditions = emptyList(),
+            emailAccounts = emptyList(),
+            runtime = runtime,
+            uiMode = ChatPromptUiMode.NONE,
+            activeObjective = ActiveObjectiveContext(
+                goal = "Rebuild the APK",
+                status = ObjectiveStatus.RUNNING,
+                summary = "Decompiled and patched smali",
+                attempts = 2,
+            ),
+        )
+        assertTrue("## Objective" in with)
+        assertTrue("Rebuild the APK" in with)
+        assertTrue("Status: running (attempt 2)" in with)
+        assertTrue("objective_set_status" in with)
+    }
+
+    // endregion
 }

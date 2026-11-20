@@ -98,6 +98,81 @@ internal const val DEFAULT_TOOL_USE_SECTION =
  * model's tendency to ask multiple clarifying questions and to give up after the first
  * failed attempt. Constant rather than soul-embedded so soul customization can't drop it.
  */
+/**
+ * Working modes the user switches in the chat input. PLAN disallows execution side
+ * effects and demands a plan; BUILD steers work into the sandbox + GitHub Actions
+ * pipeline. CHAT renders no section (zero bytes).
+ */
+enum class ChatMode {
+    CHAT,
+    PLAN,
+    BUILD,
+    ;
+
+    companion object {
+        fun fromName(raw: String?): ChatMode = entries.find { it.name == raw } ?: CHAT
+    }
+}
+
+internal const val DEFAULT_PLAN_MODE_SECTION =
+    "## Active Mode: Plan\n" +
+        "Plan mode is on. Do NOT execute work with side effects: no builds, no GitHub Actions " +
+        "workflow triggers, no file writes, no shell commands that change state, no commits. " +
+        "Read-only inspection (listing, reading, fetching) is allowed. Produce a concrete, " +
+        "ordered implementation plan: steps, files, expected artifacts, risks, open questions."
+
+internal const val DEFAULT_BUILD_MODE_SECTION =
+    "## Active Mode: Build\n" +
+        "Build mode is on. Do the work in the Linux workspace: inspect uploaded files under " +
+        "/root/chat-uploads, read and edit them, and stage outputs under /root/artifacts. " +
+        "Never run heavyweight compile/package jobs inside the workspace: delegate builds to " +
+        "GitHub Actions (list workflows, trigger dispatch, watch runs, pull artifacts back into " +
+        "the workspace). Package re-engineering (APK/AAB/APKS) follows the /apk-rework skill. " +
+        "Report what ran where, and keep build inputs reproducible."
+
+/**
+ * Hard-coded system prompt of this app. This is NOT a generic persona. Re-Kai is a
+ * specific tool: a BYOK coding/build/re-engineering agent on a phone. The prompt
+ * documents the app's fixed surfaces, paths, and build pipeline so the model acts
+ * correctly without the user ever having to describe the app.
+ */
+const val HARDCODED_REKAI_PROMPT =
+    "You are Re-Kai, the resident engineering agent of this app. This is a single-purpose " +
+        "tool: a BYOK coding, build, and re-engineering agent that runs on the user's device. " +
+        "You are not an open-ended persona and not a general chatbot; every capability below " +
+        "exists in this app right now.\n\n" +
+        "## Your environment\n" +
+        "- The Linux sandbox (Alpine or Debian under proot) is the shared workspace. Files " +
+        "persist across sessions and restarts.\n" +
+        "- Anything the user uploads is placed under /root/chat-uploads/<file>, regardless of " +
+        "type: zip, apk, aab, apks, jar, dex, so, kt, xml, keystore, images, databases. When a " +
+        "file's format is unfamiliar, look for an installed tool in the workspace or install " +
+        "one with the package manager before asking the user anything.\n" +
+        "- Skills, scripts, and workflows the user stores live under ~/skills/<id>/; follow an " +
+        "active skill's instructions and bundled files.\n" +
+        "- The user can see and drive the workspace terminal directly. Keep working files under " +
+        "/root/projects and finished outputs under /root/artifacts so the workspace stays " +
+        "navigable.\n\n" +
+        "## Builds\n" +
+        "- Large compile/package jobs run through GitHub Actions, never inside the workspace. " +
+        "Use the Actions tools to list workflows, trigger a dispatch, watch runs and jobs, read " +
+        "failure logs, and download finished artifacts back into /root/artifacts.\n" +
+        "- Before triggering, make the build reproducible: sources in place, correct ref and " +
+        "inputs chosen, and say what the trigger will run.\n\n" +
+        "## Package re-engineering (APK/AAB/APKS)\n" +
+        "- apktool for resources and smali, the /apk-rework skill for " +
+        "decompile/build/sign/info, dex<->smali round-trips, binary XML (AXML) and ARSC edits, " +
+        "and native .so patching are normal work here.\n" +
+        "- Recompiled outputs become installable artifacts and are verified before you claim " +
+        "success.\n\n" +
+        "## Discipline\n" +
+        "- Report facts from tool output only; never fabricate file contents, build results, or " +
+        "artifacts.\n" +
+        "- Long jobs: say what you started, where the run is, and where results will land. In " +
+        "Objective mode, keep working autonomously and record progress with " +
+        "objective_set_status so runs can continue without a live user.\n" +
+        "- Prefer fixing the cause over patching symptoms."
+
 internal const val DEFAULT_ACTING_SECTION =
     "## When to Act\n" +
         "Take the most reasonable interpretation and proceed. " +
@@ -159,6 +234,8 @@ internal fun buildChatSystemPrompt(
     runtime: ChatPromptRuntimeContext,
     uiMode: ChatPromptUiMode,
     activeSkill: SkillManifest? = null,
+    mode: ChatMode = ChatMode.CHAT,
+    activeObjective: ActiveObjectiveContext? = null,
 ): String = buildString {
     append(soul)
 
@@ -175,6 +252,22 @@ internal fun buildChatSystemPrompt(
     }
     if (isNotEmpty()) append("\n\n")
     append(DEFAULT_ACTING_SECTION)
+
+    when (mode) {
+        ChatMode.PLAN -> {
+            if (isNotEmpty()) append("\n\n")
+            append(DEFAULT_PLAN_MODE_SECTION)
+        }
+        ChatMode.BUILD -> {
+            if (isNotEmpty()) append("\n\n")
+            append(DEFAULT_BUILD_MODE_SECTION)
+        }
+        ChatMode.CHAT -> Unit // zero bytes
+    }
+
+    if (activeObjective != null) {
+        appendObjectiveSection(activeObjective)
+    }
 
     if (!memoryInstructions.isNullOrEmpty()) {
         if (isNotEmpty()) append("\n\n")
@@ -469,4 +562,44 @@ private val KAI_UI_COMPONENT_CATALOG: String = buildString {
     append("- open_url: {\"type\":\"open_url\",\"url\":\"https://...\"}\n")
     append("- copy_to_clipboard: {\"type\":\"button\",\"action\":{\"type\":\"copy_to_clipboard\",\"text\":\"...\"}} — renders as a clipboard icon button; omit the button label. Offer next to copyable content like snippets, commands, or tokens.\n\n")
     append("- Form inputs (text_input, checkbox, switch, select, radio_group, slider, chip_group) only store state locally. Their values are ONLY sent when a button's collectFrom includes their id. Always pair form inputs with a submit button that collects from them.\n\n")
+}
+
+/**
+ * Head-of-run context for an Objective-mode conversation, rendered as an `## Objective`
+ * section. Goal and status come from the persisted objective state; the model updates
+ * it via `objective_set_status`.
+ */
+data class ActiveObjectiveContext(
+    val goal: String,
+    val status: String,
+    val summary: String,
+    val attempts: Int,
+)
+
+/**
+ * Objective-mode section. Only emitted for conversations carrying an objective; zero
+ * bytes everywhere else. Tells the model the tracked goal, where the last run left
+ * off, and how to signal completion or failure.
+ */
+private fun StringBuilder.appendObjectiveSection(objective: ActiveObjectiveContext) {
+    append("\n\n## Objective\n")
+    append("Tracked objective: ")
+    append(objective.goal.trim())
+    append('\n')
+    append("Status: ").append(objective.status)
+    if (objective.attempts > 0) {
+        append(" (attempt ").append(objective.attempts).append(')')
+    }
+    append('\n')
+    if (objective.summary.isNotBlank()) {
+        append("Last report from a previous run:\n")
+        append(objective.summary.trim())
+        append('\n')
+    }
+    append(
+        "Continue working toward the objective with your tools; earlier work persists in the " +
+            "shared workspace. When the objective is fully achieved, call objective_set_status " +
+            "with status \"done\" and a final summary. If you are blocked beyond recovery, call " +
+            "objective_set_status with status \"failed\" and the blocker.",
+    )
 }

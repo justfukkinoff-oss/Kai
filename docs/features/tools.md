@@ -1,6 +1,6 @@
 # Tools
 
-**Last verified:** 2026-10-02
+**Last verified:** 2026-11-20
 
 Kai's tools feature allows the AI to execute external functions during conversations — web search, notifications, calendar events, shell commands, memory operations, and more. Tools are defined with a schema, executed with safety guards, and managed through per-tool toggles in settings.
 
@@ -68,6 +68,27 @@ Scheduling tools and heartbeat tools are available when the scheduling feature i
 | `list_tasks` | List scheduled tasks with their ids and status |
 | `cancel_task` | Cancel a scheduled task by id |
 | `promote_learning` | Append a well-reinforced memory to the soul/system prompt and remove the memory. Callable from any conversation, not only heartbeat runs |
+
+### Objective
+
+`objective_set_status` is available when scheduling is enabled (it rides the scheduler loop) and is not individually toggleable. See [objective.md](objective.md).
+
+| Tool | Description |
+|---|---|
+| `objective_set_status` | Agent-side self-report for objective mode: set the objective's lifecycle status (`running`, `done`, `failed`) with a summary of progress/blockers. Binds to the current conversation's objective |
+
+### GitHub Actions
+
+Build/deploy tools that delegate heavy work (Gradle builds, APK signing, releases) to GitHub Actions instead of running them inside the sandbox. Registered on Android and desktop when scheduling is enabled; each call reads a GitHub token from Settings → Integrations → GitHub, or falls back to the `Authorization` header of the enabled `https://api.githubcopilot.com/mcp/x/all` MCP server. See [github-actions.md](github-actions.md).
+
+| Tool | Description |
+|---|---|
+| `gha_list_workflows` | List dispatchable workflows of a repository |
+| `gha_trigger_workflow` | POST a `workflow_dispatch` event with optional inputs |
+| `gha_get_run` | Get run status/conclusion plus its jobs |
+| `gha_get_job_logs` | Tail the logs of a job |
+| `gha_list_artifacts` | List artifacts of a run |
+| `gha_download_artifact` | Download an artifact zip into `/root/artifacts/` (desktop: app files directory) |
 
 ### Email
 

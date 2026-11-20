@@ -1,5 +1,5 @@
 <resources>
-    <string name="welcome_message">Welcome to Kai 9000</string>
+    <string name="welcome_message">Welcome to Re-Kai</string>
     <string name="prompt_ask_question">Ask a question</string>
     <string name="error_invalid_api_key">Invalid API Key. Please check your settings.</string>
     <string name="error_rate_limit_exceeded">Rate limit exceeded. Please try again later.</string>
@@ -91,6 +91,20 @@
     <string name="tool_web_search_description">Search the web for current information</string>
     <string name="tool_fetch_url_name">Fetch URL</string>
     <string name="tool_fetch_url_description">Fetch a URL and return the response body to the agent</string>
+    <string name="tool_objective_set_status_name">Objective Status</string>
+    <string name="tool_objective_set_status_description">Report progress or completion on the active objective</string>
+    <string name="tool_gha_list_workflows_name">List GitHub Workflows</string>
+    <string name="tool_gha_list_workflows_description">List workflow files available for dispatch in a GitHub repository</string>
+    <string name="tool_gha_trigger_workflow_name">Trigger GitHub Actions Build</string>
+    <string name="tool_gha_trigger_workflow_description">Dispatch a GitHub Actions workflow build; never build in the workspace</string>
+    <string name="tool_gha_get_run_name">Check GitHub Actions Run</string>
+    <string name="tool_gha_get_run_description">Check status, conclusion and jobs of a GitHub Actions run</string>
+    <string name="tool_gha_get_job_logs_name">Read GitHub Actions Job Logs</string>
+    <string name="tool_gha_get_job_logs_description">Read the (tail of the) logs of a GitHub Actions job, e.g. to analyze build failures</string>
+    <string name="tool_gha_list_artifacts_name">List Run Artifacts</string>
+    <string name="tool_gha_list_artifacts_description">List artifacts produced by a GitHub Actions run</string>
+    <string name="tool_gha_download_artifact_name">Download Run Artifact</string>
+    <string name="tool_gha_download_artifact_description">Download a GitHub Actions artifact into the workspace</string>
     <string name="tool_schedule_task_name">Schedule Task</string>
     <string name="tool_schedule_task_description">Schedule a task for future execution</string>
     <string name="tool_cancel_task_name">Cancel Task</string>
@@ -179,7 +193,7 @@
     <string name="execution_log_status_ok">OK</string>
     <string name="execution_log_status_fail">FAIL</string>
     <string name="settings_daemon_mode">Daemon Mode</string>
-    <string name="settings_daemon_mode_description">Keep Kai 9000 running in the background so scheduled tasks execute even when the app is not in the foreground.</string>
+    <string name="settings_daemon_mode_description">Keep Re-Kai running in the background so scheduled tasks execute even when the app is not in the foreground.</string>
     <string name="settings_heartbeat">Heartbeat</string>
     <string name="settings_heartbeat_description">Periodic self-checks that let the AI review memories and tasks without user input. Runs every %1$d minutes during active hours.</string>
     <string name="settings_heartbeat_interval">Interval</string>
@@ -337,7 +351,7 @@
     <string name="interactive_welcome_title">I'm completely operational.</string>
     <string name="interactive_welcome_subtitle">Tell me what you'd like to do.</string>
     <string name="interactive_back_content_description">Back</string>
-    <string name="interactive_title">Kai 9000</string>
+    <string name="interactive_title">Re-Kai</string>
     <string name="interactive_exit_content_description">Exit interactive mode</string>
     <string name="interactive_ui_parsing_failed">UI parsing failed, trying again…</string>
     <string name="conversation_untitled">Untitled</string>
@@ -513,4 +527,26 @@
     <string name="terminal_sandbox_not_ready">Sandbox is not ready</string>
     <string name="chat_edit_submission_content_description">Edit submission</string>
     <string name="chat_cancel_edit_content_description">Cancel edit</string>
+
+    <string name="settings_github_title">GitHub</string>
+    <string name="settings_github_description">Personal access token used by the GitHub Actions build tools. A fine-grained token with Actions + Contents read and Actions write is enough. The Copilot MCP server connects with the token you enter in its own form.</string>
+    <string name="settings_github_token_label">Personal access token</string>
+    <string name="settings_github_save">Save</string>
+    <string name="settings_github_saved">Saved</string>
+
+    <string name="chat_mode_chat">Chat</string>
+    <string name="chat_mode_plan">Plan</string>
+    <string name="chat_mode_build">Build</string>
+    <string name="chat_objective_mode">Objective mode</string>
+    <string name="chat_objective_set">Set Objective</string>
+    <string name="chat_objective_hint">Describe the final goal. Agents keep working toward it and report progress automatically.</string>
+    <string name="chat_objective_pause">Pause</string>
+    <string name="chat_objective_resume">Resume</string>
+    <string name="chat_objective_remove">Remove objective</string>
+    <string name="chat_objective_cancel">Cancel</string>
+    <string name="chat_objective_status_running">running</string>
+    <string name="chat_objective_status_done">done</string>
+    <string name="chat_objective_status_failed">failed</string>
+    <string name="chat_objective_status_paused">paused</string>
+    <string name="chat_objective_badge">Objective</string>
 </resources>

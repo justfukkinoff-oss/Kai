@@ -68,8 +68,6 @@ import io.github.vinceglb.filekit.mimeType
 import io.github.vinceglb.filekit.name
 import io.github.vinceglb.filekit.readBytes
 import io.github.vinceglb.filekit.size
-import kai.composeapp.generated.resources.Res
-import kai.composeapp.generated.resources.default_soul
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.async
@@ -93,7 +91,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
-import org.jetbrains.compose.resources.getString
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.time.Clock
@@ -108,6 +105,7 @@ private const val MIN_TOOL_DISPLAY_MS = 2000L
 private const val MAX_REPEATED_TOOL_CALLS = 3
 private const val MAX_API_RETRIES = 2
 private const val MAX_HEARTBEAT_MESSAGES = 50
+private const val BINARY_UPLOAD_DIR = "/root/chat-uploads/"
 private const val ESTIMATED_CHARS_PER_TOKEN = 4
 private const val COMPACTION_THRESHOLD = 0.7 // Compact when history exceeds 70% of context window
 private const val COMPACTION_KEEP_RECENT = 4 // Number of recent user exchanges to keep verbatim
@@ -876,7 +874,7 @@ class RemoteDataRepository(
         }
         // Process every attached file: classify, compress/encode, and build an Attachment.
         // readBytes() is suspend, so this happens before the StateFlow.update block.
-        val attachments = files.map { file ->
+        val attachmentCandidates = files.map { file ->
             val fileMimeType = file.mimeType()?.toString()
             val fileName = file.name
 
@@ -889,6 +887,7 @@ class RemoteDataRepository(
                 FileCategory.TEXT -> MAX_TEXT_FILE_BYTES.toLong()
                 FileCategory.PDF -> MAX_PDF_BYTES.toLong()
                 FileCategory.IMAGE -> MAX_RAW_IMAGE_BYTES.toLong()
+                FileCategory.BINARY -> MAX_BINARY_FILE_BYTES.toLong()
                 FileCategory.UNSUPPORTED -> 0L
             }
             if (file.size() > rawSizeLimit) throw FileTooLargeException()
@@ -920,17 +919,44 @@ class RemoteDataRepository(
                     fileName = fileName,
                 )
 
+                FileCategory.BINARY -> null
+
                 FileCategory.UNSUPPORTED -> throw UnsupportedFileTypeException()
             }
-        }.toImmutableList()
+        }
 
-        if (question != null) {
+        // Binary uploads can't be shown to the model; they go into the shared Linux
+        // workspace instead and the message tells the agent where each one landed.
+        val workspaceNotes = files.mapIndexedNotNull { index, file ->
+            if (classifyFile(file.mimeType()?.toString(), file.name) != FileCategory.BINARY) {
+                return@mapIndexedNotNull null
+            }
+            val guestPath = BINARY_UPLOAD_DIR + (file.name.ifBlank { "upload-$index.bin" })
+            val copied = sandboxController.writeBinaryFile(guestPath, file.readBytes())
+            if (copied) {
+                "Attached file \"" + file.name + "\" has been placed in the Linux workspace at " +
+                    guestPath + ". Inspect it with workspace tools and work on it there."
+            } else {
+                "Attached file \"" + file.name + "\" could NOT be copied into the Linux workspace " +
+                    "(sandbox not installed?). Tell the user it needs the sandbox to work with it."
+            }
+        }
+
+        val attachments = attachmentCandidates.filterNotNull().toImmutableList()
+        val notes = workspaceNotes.joinToString("\n\n")
+        val contentWithNotes = when {
+            notes.isEmpty() -> question
+            question.isNullOrBlank() -> notes
+            else -> "$question\n\n$notes"
+        }
+
+        if (contentWithNotes != null) {
             chatHistory.update {
                 it.toMutableList().apply {
                     add(
                         History(
                             role = History.Role.USER,
-                            content = question,
+                            content = contentWithNotes,
                             attachments = attachments,
                             uiSubmission = uiSubmission,
                         ),
@@ -1608,7 +1634,13 @@ class RemoteDataRepository(
             createdAt = existingConversation?.createdAt ?: now,
             updatedAt = now,
             title = title,
-            type = existingConversation?.type ?: if (interactiveModeFlag) Conversation.TYPE_INTERACTIVE else Conversation.TYPE_CHAT,
+            type = existingConversation?.type
+                ?: when {
+                    interactiveModeFlag -> Conversation.TYPE_INTERACTIVE
+                    objectiveModeFlag && appSettings.getCurrentObjectiveGoal().isNotBlank() ->
+                        Conversation.TYPE_OBJECTIVE
+                    else -> Conversation.TYPE_CHAT
+                },
         )
 
         conversationStorage.saveConversation(conversation)
@@ -1625,10 +1657,10 @@ class RemoteDataRepository(
     override fun supportedFileExtensions(): List<String> {
         val service = currentService()
         if (service.isOnDevice) return emptyList()
-        // Images are offered only when both the service and the active model accept them —
-        // mixed services (e.g. Z.AI) pair text-only models with multimodal ones.
+        // Binary uploads don't go to the model directly — they land in the Linux
+        // sandbox workspace, so they're offered only where the sandbox exists.
         val imagesSupported = service.supportsImages && modelSupportsImages(currentModelId())
-        val base = if (imagesSupported) supportedFileExtensions else supportedFileExtensions - imageExtensions
+        val base = (if (imagesSupported) supportedFileExtensions else supportedFileExtensions - imageExtensions)
         return if (service.supportsPdf) base + "pdf" else base
     }
 
@@ -1659,6 +1691,13 @@ class RemoteDataRepository(
         val conversation = savedConversations.value.find { it.id == id } ?: return
 
         setCurrentConversationId(id)
+        // Restore the objective mode flags alongside the conversation, same way the
+        // interactive mode is restored when a conversation is loaded.
+        objectiveModeFlag = conversation.type == Conversation.TYPE_OBJECTIVE
+        appSettings.setCurrentObjectiveMode(objectiveModeFlag)
+        appSettings.setCurrentObjectiveGoal(
+            if (objectiveModeFlag) objectiveStore.get(id)?.goal.orEmpty() else "",
+        )
         chatHistory.value = conversation.messages.map { m ->
             // Prefer the modern `attachments` field. Fall back to the legacy single-file
             // fields for conversations saved before multi-attachment support.
@@ -1712,6 +1751,9 @@ class RemoteDataRepository(
     override fun startNewChat() {
         setCurrentConversationId(null)
         chatHistory.value = emptyList()
+        objectiveModeFlag = false
+        appSettings.setCurrentObjectiveMode(false)
+        appSettings.setCurrentObjectiveGoal("")
     }
 
     override fun popLastExchange() {
@@ -1811,7 +1853,10 @@ class RemoteDataRepository(
     }
 
     override suspend fun getActiveSystemPrompt(variant: SystemPromptVariant): String? {
-        val soul = appSettings.getSoulText().ifEmpty { getString(Res.string.default_soul) }
+        // Hard-coded app prompt: Re-Kai is a specific engineering agent, and the shipped
+        // default prompt documents its fixed surfaces (workspace, uploads, Actions
+        // pipeline, APK rework). A user-customized Soul still wins over it.
+        val soul = appSettings.getSoulText().ifEmpty { HARDCODED_REKAI_PROMPT }
         val memoryEnabled = appSettings.isMemoryEnabled()
         val schedulingEnabled = appSettings.isSchedulingEnabled()
 
@@ -1890,9 +1935,21 @@ class RemoteDataRepository(
 
         val activeSkill = pendingActiveSkillId?.let { skillManager.getSkill(it) }
 
+        val currentConversationId = _currentConversationId.value
+        val activeObjective = currentConversationId?.let { objectiveStore.get(it) }
+
         return buildChatSystemPrompt(
             variant = variant,
             soul = soul,
+            mode = ChatMode.fromName(appSettings.getChatMode()),
+            activeObjective = activeObjective?.let {
+                ActiveObjectiveContext(
+                    goal = it.goal,
+                    status = it.status,
+                    summary = it.summary,
+                    attempts = it.attempts,
+                )
+            },
             hasTools = hasTools,
             memoryEnabled = memoryEnabled,
             schedulingEnabled = schedulingEnabled,
@@ -1930,6 +1987,89 @@ class RemoteDataRepository(
     }
 
     override fun isInteractiveModeActive(): Boolean = interactiveModeFlag
+
+    // --- Objective mode ---
+
+    private val objectiveStore = ObjectiveStore(appSettings)
+
+    private var objectiveModeFlag = appSettings.getCurrentObjectiveMode()
+
+    override fun isObjectiveModeActive(): Boolean = objectiveModeFlag
+
+    override fun getChatMode(): ChatMode = ChatMode.fromName(appSettings.getChatMode())
+
+    override fun setChatMode(mode: ChatMode) {
+        appSettings.setChatMode(mode.name)
+    }
+
+    override suspend fun setObjective(goal: String) {
+        if (_currentConversationId.value == null) {
+            setCurrentConversationId(Uuid.random().toString())
+        }
+        val conversationId = _currentConversationId.value ?: return
+        objectiveModeFlag = goal.isNotBlank()
+        appSettings.setCurrentObjectiveMode(objectiveModeFlag)
+        appSettings.setCurrentObjectiveGoal(goal)
+        if (goal.isBlank()) {
+            objectiveStore.remove(conversationId)
+        } else {
+            val existing = objectiveStore.get(conversationId)
+            objectiveStore.upsert(
+                conversationId,
+                ObjectiveState(
+                    goal = goal,
+                    status = existing?.status ?: ObjectiveStatus.RUNNING,
+                    summary = existing?.summary ?: "",
+                    lastRunAtMs = existing?.lastRunAtMs ?: 0L,
+                    attempts = existing?.attempts ?: 0,
+                ),
+            )
+        }
+        val snapshot = savedConversations.value
+        val existingConversation = snapshot.find { it.id == conversationId }
+        if (existingConversation == null) {
+            conversationStorage.saveConversation(
+                Conversation(
+                    id = conversationId,
+                    messages = emptyList(),
+                    createdAt = Clock.System.now().toEpochMilliseconds(),
+                    updatedAt = Clock.System.now().toEpochMilliseconds(),
+                    title = goal,
+                    type = Conversation.TYPE_OBJECTIVE,
+                ),
+            )
+        } else {
+            conversationStorage.saveConversation(
+                existingConversation.copy(
+                    title = if (goal.isBlank() && existingConversation.type != Conversation.TYPE_OBJECTIVE) {
+                        existingConversation.title
+                    } else if (existingConversation.title.isBlank()) {
+                        goal
+                    } else {
+                        existingConversation.title
+                    },
+                    type = if (goal.isBlank()) {
+                        if (existingConversation.type == Conversation.TYPE_OBJECTIVE) Conversation.TYPE_CHAT else existingConversation.type
+                    } else {
+                        Conversation.TYPE_OBJECTIVE
+                    },
+                ),
+            )
+        }
+    }
+
+    override suspend fun setObjectiveStatus(status: String) {
+        val conversationId = _currentConversationId.value ?: return
+        objectiveStore.get(conversationId)?.let {
+            objectiveStore.upsert(conversationId, it.copy(status = status))
+        }
+    }
+
+    override fun getActiveObjective(): ObjectiveState? {
+        val conversationId = _currentConversationId.value ?: return null
+        return objectiveStore.get(conversationId)
+    }
+
 
     override fun isMemoryEnabled(): Boolean = appSettings.isMemoryEnabled()
 
@@ -2276,6 +2416,32 @@ class RemoteDataRepository(
         )
 
         _hasUnreadHeartbeat.value = true
+        conversationStorage.saveConversation(conversation)
+    }
+
+    override suspend fun addAssistantMessageTo(conversationId: String, content: String) {
+        val now = Clock.System.now().toEpochMilliseconds()
+
+        val existing = savedConversations.value.find { it.id == conversationId }
+
+        val newMessage = Conversation.Message(
+            id = Uuid.random().toString(),
+            role = "assistant",
+            content = content,
+        )
+
+        // Objective continuations can run long — use the heartbeat-sized cap.
+        val cap = MAX_HEARTBEAT_MESSAGES
+        val messages = ((existing?.messages ?: emptyList()) + newMessage).takeLast(cap)
+
+        val conversation = Conversation(
+            id = conversationId,
+            messages = messages,
+            createdAt = existing?.createdAt ?: now,
+            updatedAt = now,
+            type = existing?.type ?: Conversation.TYPE_OBJECTIVE,
+        )
+
         conversationStorage.saveConversation(conversation)
     }
 

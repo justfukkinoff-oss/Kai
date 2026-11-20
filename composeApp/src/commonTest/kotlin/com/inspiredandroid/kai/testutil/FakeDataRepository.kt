@@ -10,6 +10,9 @@ import com.inspiredandroid.kai.data.HeartbeatConfig
 import com.inspiredandroid.kai.data.HeartbeatLogEntry
 import com.inspiredandroid.kai.data.ImportSection
 import com.inspiredandroid.kai.data.MemoryEntry
+import com.inspiredandroid.kai.data.ChatMode
+import com.inspiredandroid.kai.data.ObjectiveState
+import com.inspiredandroid.kai.data.ObjectiveStatus
 import com.inspiredandroid.kai.data.ScheduledTask
 import com.inspiredandroid.kai.data.Service
 import com.inspiredandroid.kai.data.ServiceEntry
@@ -406,6 +409,38 @@ class FakeDataRepository : DataRepository {
     }
 
     override fun isInteractiveModeActive(): Boolean = interactiveMode
+
+    private var objectiveMode = false
+    private var objectiveGoal = ""
+    private var objectiveStatus = ObjectiveStatus.RUNNING
+
+    override fun isObjectiveModeActive(): Boolean = objectiveMode
+
+    private var chatMode = ChatMode.CHAT
+
+    override fun getChatMode(): ChatMode = chatMode
+
+    override fun setChatMode(mode: ChatMode) {
+        chatMode = mode
+    }
+
+    override suspend fun setObjective(goal: String) {
+        objectiveMode = goal.isNotBlank()
+        objectiveGoal = goal.trim()
+    }
+
+    override suspend fun setObjectiveStatus(status: String) {
+        objectiveStatus = status
+    }
+
+    override fun getActiveObjective(): ObjectiveState? =
+        if (objectiveGoal.isBlank()) {
+            null
+        } else {
+            ObjectiveState(goal = objectiveGoal, status = objectiveStatus)
+        }
+
+    override suspend fun addAssistantMessageTo(conversationId: String, content: String) {}
 
     private var memoryEnabled = true
     private val memories = mutableListOf<MemoryEntry>()

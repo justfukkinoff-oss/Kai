@@ -1,12 +1,12 @@
 # Skills
 
-**Last verified:** 2026-10-02
+**Last verified:** 2026-11-20
 
 Kai supports installable **skills**: reusable instruction bundles, modeled on Anthropic's [SKILL.md](https://github.com/anthropics/skills) format (now an open standard at [agentskills.io](https://agentskills.io)). A skill packages a name, a description, a body of instructions, and optional bundled files.
 
 User-installed skills live **in the Linux sandbox**: each is a folder at `~/skills/<id>/` (its `SKILL.md` plus any files). There is no separate copy of those folders in app settings. Because of this, the Skills UI is **Android-only** (the only platform with a sandbox) and requires the sandbox to be installed first. The user browses a curated set of skill marketplaces (or installs from any GitHub repo) and triggers a skill in chat by starting a message with its slash command.
 
-In addition, Kai ships a small set of **built-in skills** (currently `create-skill`) loaded from app compose resources. Built-ins appear in the Skills list once the sandbox is installed, are labeled as built-in, and are not removable through the UI. If a user installs a sandbox skill with the same id, the sandbox copy takes precedence over the built-in. `create-skill` guides the model through writing a new `~/skills/<id>/SKILL.md` via the shell; after a turn that used it, the skill list is rescanned so the new skill shows up in the slash menu and Settings without a restart.
+In addition, Kai ships a small set of **built-in skills** (currently `create-skill` and `apk-rework`) loaded from app compose resources. Built-ins appear in the Skills list once the sandbox is installed, are labeled as built-in, and are not removable through the UI. If a user installs a sandbox skill with the same id, the sandbox copy takes precedence over the built-in. `create-skill` guides the model through writing a new `~/skills/<id>/SKILL.md` via the shell; after a turn that used it, the skill list is rescanned so the new skill shows up in the slash menu and Settings without a restart.
 
 ## Concepts
 
