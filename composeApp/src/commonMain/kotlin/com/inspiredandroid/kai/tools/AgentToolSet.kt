@@ -34,6 +34,7 @@ fun buildAgentToolSet(
     if (appSettings.isSchedulingEnabled()) {
         addAll(SchedulingTools.getSchedulingTools(taskStore))
         addAll(HeartbeatTools.getHeartbeatTools(memoryStore, appSettings))
+        addAll(ObjectiveTools.getObjectiveTools())
     }
 
     if (emailStore != null && appSettings.isEmailEnabled()) {

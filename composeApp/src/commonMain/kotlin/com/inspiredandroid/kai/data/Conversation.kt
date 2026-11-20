@@ -32,6 +32,7 @@ data class Conversation(
         const val TYPE_CHAT = "chat"
         const val TYPE_HEARTBEAT = "heartbeat"
         const val TYPE_INTERACTIVE = "interactive"
+        const val TYPE_OBJECTIVE = "objective"
     }
 
     @OptIn(ExperimentalSerializationApi::class)

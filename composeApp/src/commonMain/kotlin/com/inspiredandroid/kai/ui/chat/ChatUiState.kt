@@ -4,7 +4,9 @@ package com.inspiredandroid.kai.ui.chat
 
 import androidx.compose.runtime.Immutable
 import com.inspiredandroid.kai.data.Attachment
+import com.inspiredandroid.kai.data.ChatMode
 import com.inspiredandroid.kai.data.FallbackStatus
+import com.inspiredandroid.kai.data.ObjectiveState
 import com.inspiredandroid.kai.data.ReasoningRequestMode
 import com.inspiredandroid.kai.data.ServiceEntry
 import com.inspiredandroid.kai.data.SharedJson
@@ -64,6 +66,7 @@ data class ConversationSummary(
     val updatedAt: Long,
     val isHeartbeat: Boolean = false,
     val isInteractive: Boolean = false,
+    val isObjective: Boolean = false,
 )
 
 @Immutable
@@ -77,6 +80,10 @@ data class ChatUiState(
     val warning: StringResource? = null,
     val showPrivacyInfo: Boolean = false,
     val supportedFileExtensions: ImmutableList<String> = persistentListOf(),
+    val chatMode: ChatMode = ChatMode.CHAT,
+    val objectiveMode: Boolean = false,
+    val activeObjective: ObjectiveState? = null,
+    val objectiveRunning: Boolean = false,
     val isSpeaking: Boolean = false,
     val isSpeakingContentId: String = "",
     val files: ImmutableList<PlatformFile> = persistentListOf(),

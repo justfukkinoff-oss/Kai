@@ -38,6 +38,8 @@ import com.inspiredandroid.kai.tools.NotificationTools
 import com.inspiredandroid.kai.tools.OpenFileTool
 import com.inspiredandroid.kai.tools.PermissionController
 import com.inspiredandroid.kai.tools.ProcessManagerTool
+import com.inspiredandroid.kai.SandboxController
+import com.inspiredandroid.kai.tools.GitHubActionsTools
 import com.inspiredandroid.kai.tools.SendNotificationTool
 import com.inspiredandroid.kai.tools.SetAlarmTool
 import com.inspiredandroid.kai.tools.ShellCommandTool
@@ -259,6 +261,15 @@ actual fun getAvailableTools(): List<Tool> {
                 addAll(NotificationTools.getNotificationTools(notificationStore, notificationReader))
             }
         }
+
+        // GitHub Actions build pipeline. Builds are delegated to CI, never compiled in
+        // the workspace; finished artifacts land in /root/artifacts.
+        val sandboxController: SandboxController by inject(SandboxController::class.java)
+        addAll(
+            GitHubActionsTools.getGitHubActionsTools { fileName, bytes ->
+                sandboxController.writeBinaryFile(GitHubActionsTools.SINK_PATH + fileName, bytes)
+            },
+        )
     }
 }
 

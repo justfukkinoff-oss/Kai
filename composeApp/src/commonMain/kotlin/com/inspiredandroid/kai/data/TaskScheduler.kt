@@ -28,6 +28,7 @@ class TaskScheduler(
     private val taskStore: TaskStore? = null,
     private val appSettings: AppSettings? = null,
     private val heartbeatManager: HeartbeatManager? = null,
+    private val objectiveManager: ObjectiveManager? = null,
     private val emailStore: EmailStore? = null,
     private val emailPoller: EmailPoller? = null,
     private val smsStore: SmsStore? = null,
@@ -127,6 +128,13 @@ class TaskScheduler(
                     runHeartbeat()
                 }
 
+                // Objective sweeps: continue active objectives and restart failed ones.
+                // Runs are serialized inside the manager and skipped while the user has
+                // a foreground request in flight — same gating as the heartbeat.
+                if (!isLoadingCheck()) {
+                    objectiveManager?.runDueObjectives { isLoadingCheck() }
+                }
+
                 // Email polling
                 if (!isLoadingCheck() && isEmailSupported && appSettings.isEmailEnabled() && emailStore != null) {
                     checkNewEmails { isLoadingCheck() }
@@ -184,9 +192,8 @@ class TaskScheduler(
                     )
                     if (preview.isNotBlank()) {
                         sendHeartbeatNotification(
-                            title = "Kai heartbeat",
+                            title = "Re-Kai heartbeat",
                             body = preview,
-                        )
                     }
                 }
             }

@@ -350,6 +350,19 @@ class AndroidSandboxController : SandboxController {
         }
     }
 
+    override suspend fun writeBinaryFile(path: String, bytes: ByteArray): Boolean = withContext(Dispatchers.IO) {
+        val file = sandboxManager.fileMap().resolve(path)
+            ?: return@withContext false
+        if (file.exists() && !file.isFile) return@withContext false
+        try {
+            file.parentFile?.mkdirs()
+            file.writeBytes(bytes)
+            true
+        } catch (e: IOException) {
+            false
+        }
+    }
+
     override suspend fun openFile(path: String): Result<Unit> = withContext(Dispatchers.IO) {
         val file = sandboxManager.fileMap().resolve(path)
             ?: return@withContext Result.failure(IllegalArgumentException("Invalid path: $path"))

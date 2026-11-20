@@ -30,6 +30,12 @@ data class PopularMcpServer(
  */
 val popularMcpServers = listOf(
     PopularMcpServer(
+        name = "GitHub Copilot",
+        url = "https://api.githubcopilot.com/mcp/x/all",
+        description = "GitHub Copilot agent tools: repos, issues, PRs, Actions, code search",
+        requiresAuth = true,
+    ),
+    PopularMcpServer(
         name = "Context7",
         url = "https://mcp.context7.com/mcp",
         description = "Up-to-date library and framework docs",

@@ -22,6 +22,7 @@ import com.inspiredandroid.kai.network.tools.ToolInfo
 import com.inspiredandroid.kai.tools.CommonTools
 import com.inspiredandroid.kai.tools.ProcessManagerTool
 import com.inspiredandroid.kai.tools.ShellCommandTool
+import com.inspiredandroid.kai.tools.GitHubActionsTools
 import com.inspiredandroid.kai.tools.buildAgentToolSet
 import com.russhwolf.settings.Settings
 import io.github.vinceglb.filekit.FileKit
@@ -160,6 +161,19 @@ actual fun getAvailableTools(): List<Tool> {
             add(ShellCommandTool)
             add(ProcessManagerTool)
         }
+
+        // GitHub Actions build pipeline. No Linux sandbox on desktop — artifacts are
+        // written into the app files directory instead.
+        addAll(
+            GitHubActionsTools.getGitHubActionsTools { fileName, bytes ->
+                runCatching {
+                    val dir = java.io.File(getAppFilesDirectory(), "artifacts")
+                    dir.mkdirs()
+                    java.io.File(dir, fileName).writeBytes(bytes)
+                    true
+                }.getOrElse { false }
+            },
+        )
     }
 }
 
@@ -210,7 +224,7 @@ actual fun sendHeartbeatNotification(title: String, body: String) {
                 val tray = java.awt.SystemTray.getSystemTray()
                 // 1×1 transparent placeholder — Windows auto-supplies a fallback icon for the toast.
                 val image = java.awt.image.BufferedImage(16, 16, java.awt.image.BufferedImage.TYPE_INT_ARGB)
-                val trayIcon = java.awt.TrayIcon(image, "Kai")
+                val trayIcon = java.awt.TrayIcon(image, "Re-Kai")
                 trayIcon.isImageAutoSize = true
                 tray.add(trayIcon)
                 trayIcon.displayMessage(title, body, java.awt.TrayIcon.MessageType.INFO)

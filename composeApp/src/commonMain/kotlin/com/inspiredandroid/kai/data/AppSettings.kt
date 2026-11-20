@@ -308,11 +308,13 @@ class AppSettings(internal val settings: Settings) {
             return try {
                 ThemeMode.valueOf(raw)
             } catch (_: IllegalArgumentException) {
-                ThemeMode.System
+                ThemeMode.OledBlack
             }
         }
-        // Migrate the legacy boolean OLED toggle: true → OledBlack, false → System.
-        return if (settings.getBoolean(KEY_OLED_MODE_ENABLED, false)) ThemeMode.OledBlack else ThemeMode.System
+        // Re-Kai defaults to molded pure black. The legacy boolean is kept only so
+        // upgrades that never wrote the enum fall through here rather than crash.
+        settings.getBoolean(KEY_OLED_MODE_ENABLED, false)
+        return ThemeMode.OledBlack
     }
 
     // Daemon mode
@@ -558,6 +560,44 @@ class AppSettings(internal val settings: Settings) {
         settings.putString(KEY_SPLINTERLANDS_BATTLE_LOG, json)
     }
 
+    // GitHub integration (Actions build tools; also seeds the Copilot MCP prefill)
+    fun getGithubToken(): String = settings.getString(KEY_GITHUB_TOKEN, "")
+
+    fun setGithubToken(token: String) {
+        settings.putString(KEY_GITHUB_TOKEN, token.trim())
+    }
+
+    // Chat working mode (CHAT / PLAN / BUILD)
+    fun getChatMode(): String = settings.getString(KEY_CHAT_MODE, "")
+
+    fun setChatMode(mode: String) {
+        settings.putString(KEY_CHAT_MODE, mode)
+    }
+
+    // Objective mode: flag + goal for the conversation being composed right now.
+    fun getCurrentObjectiveMode(): Boolean = settings.getBoolean(KEY_CURRENT_OBJECTIVE_MODE, false)
+
+    fun setCurrentObjectiveMode(enabled: Boolean) {
+        settings.putBoolean(KEY_CURRENT_OBJECTIVE_MODE, enabled)
+    }
+
+    fun getCurrentObjectiveGoal(): String = settings.getString(KEY_CURRENT_OBJECTIVE_GOAL, "")
+
+    fun setCurrentObjectiveGoal(goal: String) {
+        settings.putString(KEY_CURRENT_OBJECTIVE_GOAL, goal.trim())
+    }
+
+    /**
+     * Per-objective progress state, keyed by conversation id, persisted as JSON:
+     * `{ "<convId>": {"goal":..., "status":"running|done|failed|paused", "summary":...,
+     *  "lastRunAtMs":..., "attempts":...} }`
+     */
+    fun getObjectivesJson(): String = settings.getString(KEY_OBJECTIVE_STATES, "")
+
+    fun setObjectivesJson(json: String) {
+        settings.putString(KEY_OBJECTIVE_STATES, json)
+    }
+
     companion object {
         const val KEY_CURRENT_SERVICE_ID = "current_service_id"
         const val KEY_APP_OPENS = "app_opens"
@@ -621,6 +661,12 @@ class AppSettings(internal val settings: Settings) {
         const val KEY_SPLINTERLANDS_INSTANCE_IDS = "splinterlands_instance_ids"
 
         const val KEY_MODEL_CONTEXT_PREFIX = "model_context_"
+
+        const val KEY_GITHUB_TOKEN = "github_token"
+        const val KEY_CHAT_MODE = "chat_mode"
+        const val KEY_CURRENT_OBJECTIVE_MODE = "current_objective_mode"
+        const val KEY_CURRENT_OBJECTIVE_GOAL = "current_objective_goal"
+        const val KEY_OBJECTIVE_STATES = "objective_states"
 
         const val KEY_SANDBOX_ENABLED = "sandbox_enabled"
         const val KEY_SANDBOX_DISTRO = "sandbox_distro"

@@ -10,6 +10,8 @@ import com.inspiredandroid.kai.data.NotificationStore
 import com.inspiredandroid.kai.data.RemoteDataRepository
 import com.inspiredandroid.kai.data.SmsDraftStore
 import com.inspiredandroid.kai.data.SmsStore
+import com.inspiredandroid.kai.data.ObjectiveManager
+import com.inspiredandroid.kai.data.ObjectiveStore
 import com.inspiredandroid.kai.data.TaskScheduler
 import com.inspiredandroid.kai.data.TaskStore
 import com.inspiredandroid.kai.data.ToolExecutor
@@ -136,6 +138,10 @@ val appModule = module {
         )
     }
     single<DataRepository> { get<RemoteDataRepository>() }
+    single<ObjectiveStore> { ObjectiveStore(get()) }
+    single<ObjectiveManager> {
+        ObjectiveManager(get<DataRepository>(), get<ObjectiveStore>(), get<AppSettings>())
+    }
     single<SplinterlandsBattleRunner> {
         SplinterlandsBattleRunner(get(), get(), get<DataRepository>(), get<DaemonController>())
     }
@@ -145,6 +151,7 @@ val appModule = module {
             get(),
             get(),
             get(),
+            get<ObjectiveManager>(),
             get(),
             get<EmailPoller>(),
             get<SmsStore>(),

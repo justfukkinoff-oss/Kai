@@ -2,8 +2,12 @@ package com.inspiredandroid.kai.ui.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.inspiredandroid.kai.data.ChatMode
 import com.inspiredandroid.kai.data.Conversation
 import com.inspiredandroid.kai.data.DataRepository
+import com.inspiredandroid.kai.data.ObjectiveManager
+import com.inspiredandroid.kai.data.ObjectiveState
+import com.inspiredandroid.kai.data.ObjectiveStatus
 import com.inspiredandroid.kai.data.FreeMode
 import com.inspiredandroid.kai.data.Service
 import com.inspiredandroid.kai.data.ServiceEntry
@@ -50,6 +54,7 @@ class ChatViewModel(
     private val dataRepository: DataRepository,
     private val taskScheduler: TaskScheduler,
     private val backgroundDispatcher: CoroutineContext = getBackgroundDispatcher(),
+    private val objectiveManager: ObjectiveManager? = null,
     private val localNetworkPermissionController: PermissionController = PermissionController(AppPermission.LOCAL_NETWORK),
 ) : ViewModel() {
 
@@ -78,6 +83,10 @@ class ChatViewModel(
         sendSmsDraft = ::sendSmsDraft,
         discardSmsDraft = ::discardSmsDraft,
         consumeComposerPrefill = ::consumeComposerPrefill,
+        setChatMode = ::handleSetChatMode,
+        setObjective = ::setObjective,
+        pauseObjective = ::pauseObjective,
+        resumeObjective = ::resumeObjective,
     )
     private val freeModeNames: Map<FreeMode, String> = FreeMode.entries.associateWith { "Free ${it.modelId.replaceFirstChar { c -> c.uppercase() }}" }
     private var currentJob: Job? = null
@@ -157,6 +166,18 @@ class ChatViewModel(
                     dataRepository.consumeOpenShareRequest()
                 }
         }
+
+        viewModelScope.launch {
+            objectiveManager?.runningConversationId?.collect { runningId ->
+                _state.update {
+                    it.copy(
+                        objectiveRunning = runningId != null &&
+                            runningId == dataRepository.currentConversationId.value,
+                        activeObjective = dataRepository.getActiveObjective(),
+                    )
+                }
+            }
+        }
     }
 
     val state = combine(
@@ -171,12 +192,14 @@ class ChatViewModel(
             .map {
                 val isHeartbeat = it.type == Conversation.TYPE_HEARTBEAT
                 val isInteractive = it.type == Conversation.TYPE_INTERACTIVE
+                val isObjective = it.type == Conversation.TYPE_OBJECTIVE
                 ConversationSummary(
                     id = it.id,
                     title = if (isHeartbeat) "" else it.title.ifEmpty { getString(Res.string.conversation_untitled) },
                     updatedAt = it.updatedAt,
                     isHeartbeat = isHeartbeat,
                     isInteractive = isInteractive,
+                    isObjective = isObjective,
                 )
             }
         state.copy(
@@ -186,6 +209,9 @@ class ChatViewModel(
             currentConversationId = conversationId,
             hasUnreadHeartbeat = hasUnreadHeartbeat,
             installedSkills = dataRepository.getInstalledSkills().toImmutableList(),
+            chatMode = dataRepository.getChatMode(),
+            objectiveMode = dataRepository.isObjectiveModeActive(),
+            activeObjective = dataRepository.getActiveObjective(),
         )
     }.distinctUntilChanged().stateIn(
         scope = viewModelScope,
@@ -346,9 +372,8 @@ class ChatViewModel(
     }
 
     private fun addFile(file: PlatformFile) {
-        val ext = file.extension.lowercase()
         val supported = dataRepository.supportedFileExtensions()
-        if (ext.isEmpty() || ext !in supported) {
+        if (supported.isEmpty() || file.extension.lowercase() !in supported) {
             _state.update {
                 it.copy(snackbarMessage = Res.string.error_unsupported_file_type)
             }
@@ -462,6 +487,8 @@ class ChatViewModel(
                 isInteractiveMode = isInteractive,
                 isLoading = false,
                 composerPrefill = null,
+                objectiveMode = dataRepository.isObjectiveModeActive(),
+                activeObjective = dataRepository.getActiveObjective(),
             )
         }
     }
@@ -531,12 +558,43 @@ class ChatViewModel(
                 isInteractiveMode = false,
                 isLoading = false,
                 composerPrefill = composerPrefill,
+                objectiveMode = false,
+                activeObjective = null,
+                objectiveRunning = false,
             )
         }
     }
 
+
     private fun consumeComposerPrefill() {
         _state.update { it.copy(composerPrefill = null) }
+    }
+
+    private fun setChatMode(mode: ChatMode) {
+        dataRepository.setChatMode(mode)
+        _state.update { it.copy(chatMode = mode) }
+    }
+
+    private fun handleSetChatMode(rawMode: String) = setChatMode(ChatMode.fromName(rawMode))
+
+    private fun setObjective(goal: String) {
+        viewModelScope.launch { dataRepository.setObjective(goal) }
+        _state.update {
+            it.copy(
+                objectiveMode = goal.isNotBlank(),
+                activeObjective = dataRepository.getActiveObjective(),
+            )
+        }
+    }
+
+    private fun pauseObjective() {
+        viewModelScope.launch { dataRepository.setObjectiveStatus(ObjectiveStatus.PAUSED) }
+        _state.update { it.copy(activeObjective = dataRepository.getActiveObjective()) }
+    }
+
+    private fun resumeObjective() {
+        viewModelScope.launch { dataRepository.setObjectiveStatus(ObjectiveStatus.RUNNING) }
+        _state.update { it.copy(activeObjective = dataRepository.getActiveObjective()) }
     }
 
     private fun enterInteractiveMode() {

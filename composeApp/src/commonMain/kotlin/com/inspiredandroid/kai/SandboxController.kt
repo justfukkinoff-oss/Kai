@@ -197,6 +197,13 @@ class NoOpSandboxController : SandboxController {
     override suspend fun listDirectory(path: String): List<SandboxFileEntry> = emptyList()
     override suspend fun readTextFile(path: String, maxBytes: Int, force: Boolean): TextFileResult = TextFileResult.Unreadable
     override suspend fun writeTextFile(path: String, content: String): Boolean = false
+
+    /**
+     * Write raw binary bytes to a guest path in the sandbox (e.g. uploaded files into
+     * /root/chat-uploads or downloaded artifacts into /root/artifacts). Android-only;
+     * other platforms return false.
+     */
+    override suspend fun writeBinaryFile(path: String, bytes: ByteArray): Boolean = false
     override suspend fun openFile(path: String): Result<Unit> = Result.failure(UnsupportedOperationException("Sandbox file browser is Android-only"))
     override suspend fun deleteEntry(path: String, recursive: Boolean): Boolean = false
     override suspend fun renameEntry(path: String, newName: String): Result<String> = Result.failure(UnsupportedOperationException("Sandbox file browser is Android-only"))

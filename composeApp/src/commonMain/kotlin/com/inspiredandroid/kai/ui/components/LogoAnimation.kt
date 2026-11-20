@@ -39,11 +39,11 @@ fun LogoAnimation(
         val darkCenter = Offset(center.x + displacement, center.y)
         val lightCenter = Offset(center.x - displacement, center.y)
         if (drawDarkFirst) {
-            drawCircle(Color(0xFF582FB7), radius, darkCenter)
-            drawCircle(Color(0xFF8063C5), radius, lightCenter)
+            drawCircle(Color(0xFF00838F), radius, darkCenter)
+            drawCircle(Color(0xFF4DD0E1), radius, lightCenter)
         } else {
-            drawCircle(Color(0xFF8063C5), radius, lightCenter)
-            drawCircle(Color(0xFF582FB7), radius, darkCenter)
+            drawCircle(Color(0xFF4DD0E1), radius, lightCenter)
+            drawCircle(Color(0xFF00838F), radius, darkCenter)
         }
     }
 }

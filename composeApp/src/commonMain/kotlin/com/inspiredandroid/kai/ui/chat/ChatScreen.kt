@@ -87,6 +87,8 @@ import com.inspiredandroid.kai.ui.chat.composables.EmptyState
 import com.inspiredandroid.kai.ui.chat.composables.ErrorMessage
 import com.inspiredandroid.kai.ui.chat.composables.FreeProviderSuggestionsPanel
 import com.inspiredandroid.kai.ui.chat.composables.HeartbeatBanner
+import com.inspiredandroid.kai.ui.chat.composables.ObjectiveBanner
+import com.inspiredandroid.kai.ui.chat.composables.ObjectiveDialog
 import com.inspiredandroid.kai.ui.chat.composables.PendingSmsBanners
 import com.inspiredandroid.kai.ui.chat.composables.QuestionInput
 import com.inspiredandroid.kai.ui.chat.composables.ServiceSelector
@@ -503,6 +505,7 @@ private fun ChatModeScreen(
     previewSandboxLines: ImmutableList<TerminalLine> = persistentListOf(),
 ) {
     var showHistorySheet by remember { mutableStateOf(false) }
+    var showObjectiveDialog by remember { mutableStateOf(false) }
     var isSandboxOpen by rememberSaveable { mutableStateOf(initialSandboxOpen) }
     // Hoisted here so the draft survives toggling the sandbox/terminal view, which
     // removes QuestionInput from composition and would otherwise drop the text.
@@ -585,6 +588,18 @@ private fun ChatModeScreen(
                     uiState.actions.clearUnreadHeartbeat()
                 },
             )
+
+            if (uiState.objectiveMode) {
+                ObjectiveBanner(
+                    objective = uiState.activeObjective,
+                    onPause = uiState.actions.pauseObjective,
+                    onResume = uiState.actions.resumeObjective,
+                    onRemove = {
+                        uiState.actions.setObjective("")
+                        showObjectiveDialog = false
+                    },
+                )
+            }
 
             PendingSmsBanners(
                 drafts = uiState.smsDrafts,
@@ -959,6 +974,10 @@ private fun ChatModeScreen(
                     availableServices = uiState.availableServices,
                     onSelectService = uiState.actions.selectService,
                     installedSkills = uiState.installedSkills,
+                    chatMode = uiState.chatMode,
+                    onChatModeSelect = { uiState.actions.setChatMode(it.name) },
+                    objectiveMode = uiState.objectiveMode,
+                    onOpenObjective = { showObjectiveDialog = true },
                 )
             }
         }
@@ -969,6 +988,16 @@ private fun ChatModeScreen(
             Snackbar(snackbarData = data)
         }
     }
+
+    ObjectiveDialog(
+        visible = showObjectiveDialog,
+        initialGoal = uiState.activeObjective?.goal.orEmpty(),
+        onConfirm = { goal ->
+            showObjectiveDialog = false
+            uiState.actions.setObjective(goal)
+        },
+        onDismiss = { showObjectiveDialog = false },
+    )
 
     if (showHistorySheet) {
         ChatHistorySheet(

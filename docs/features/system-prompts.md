@@ -1,6 +1,6 @@
 # System Prompts
 
-**Last verified:** 2026-10-02
+**Last verified:** 2026-11-20
 
 Kai has several distinct prompt-construction paths. Each one is built by a **pure function** with explicit inputs (no DI, no suspend, no resource loading, no clocks) and is covered by a unit-test suite so future edits don't silently break unrelated variations.
 
@@ -21,7 +21,7 @@ The on-device tool allowlist (`LOCAL_TOOL_ALLOWLIST` in `RemoteDataRepository.kt
 
 | Section | `CHAT_REMOTE` | `CHAT_LOCAL` | Gating input |
 |---|:-:|:-:|---|
-| Soul | always | always | `soul` param (non-empty) |
+| Soul | always | always | `soul` param (non-empty). The default (settings soul empty) is no longer a generic persona — it is the hard-coded `HARDCODED_REKAI_PROMPT` in `ChatSystemPromptBuilder.kt`: Re-Kai's engineering-agent charter (sandbox workspace conventions, upload/build/artifact flows, APK re-engineering, execution discipline). A user-entered soul still overrides it |
 | Honesty rule | always | always | baked into `DEFAULT_HONESTY_RULE` constant — one inline sentence ("Do not fabricate tool outputs, file contents, citations, or completed work"). Guards observed regressions where models invented tool output and where kai-ui button labels implied operations the callback couldn't perform. No `##` header — one sentence doesn't earn a section |
 | `## Tool Use` | when tools available | when tools available | baked into `DEFAULT_TOOL_USE_SECTION` constant — tells the model to reach for tools to resolve ambiguity, check tool availability before declaring a capability unavailable, prefer self-lookup over asking the user, and extract signal from noisy output. Gated on `hasTools`: with every tool disabled (or a model that doesn't support tool calls) the section is dropped rather than telling the model to use tools it doesn't have. Soul customization still can't drop it while tools exist |
 | `## When to Act` | always | always | baked into `DEFAULT_ACTING_SECTION` constant — caps clarifying questions at one, only when genuinely blocked; demands recovery after a failed first attempt; mandates seeing work through to a usable result. Always rendered (both variants), same rationale as above |
@@ -37,6 +37,8 @@ The on-device tool allowlist (`LOCAL_TOOL_ALLOWLIST` in `RemoteDataRepository.kt
 | `## Heartbeat Additions` | when list non-empty | never | `heartbeatAdditions` — standing `schedule_task(on_heartbeat=true)` entries the AI can see/reference/cancel |
 | `## Active skill: <name>` | when activated | when activated | `activeSkill` param — non-null only when the user prefixed the current turn's message with `/<skill-id>` matching an installed, enabled skill. Emits the skill's instruction body plus a list of any bundled files (available at `~/skills/<id>/` in the sandbox). Zero bytes on every other turn. See [skills.md](skills.md) |
 | `## Context` | always | always | `runtime` param (local time with offset + IANA zone, UTC, platform, model, provider). Local time leads so the model anchors on the user's wall clock when computing relative times |
+| `## Mode: Chat/Plan/Build` | CHAT: none; PLAN/BUILD: always | always | `mode` param (`ChatMode` from settings) — PLAN injects the no-side-effects plan-only section, BUILD injects the workspace + GitHub Actions delegation section (uploads in `/root/chat-uploads`, artifacts in `/root/artifacts`, `~/skills/apk-rework` for APK work) |
+| `## Objective` | when an objective is set on the conversation | never | `activeObjective` param (`ActiveObjectiveContext` from `ObjectiveStore`) — goal, lifecycle status, attempt count, latest summary, plus instructions to self-report via `objective_set_status` |
 | `## Dynamic UI` | when Dynamic UI is enabled in settings and the model supports tool calls (not in interactive mode) | never | Dynamic UI setting + model tool support |
 | `## Interactive UI Mode` | when the conversation is in interactive mode | never | Interactive mode flag (takes precedence over Dynamic UI) |
 

@@ -121,6 +121,15 @@ interface DataRepository {
     fun setInteractiveMode(enabled: Boolean)
     fun isInteractiveModeActive(): Boolean
 
+    fun getChatMode(): ChatMode
+    fun setChatMode(mode: ChatMode)
+
+    // Objective mode — one running goal per conversation.
+    fun isObjectiveModeActive(): Boolean
+    suspend fun setObjective(goal: String)
+    suspend fun setObjectiveStatus(status: String)
+    fun getActiveObjective(): ObjectiveState?
+
     // Daemon mode
     fun isDaemonEnabled(): Boolean
     fun setDaemonEnabled(enabled: Boolean)
@@ -211,6 +220,13 @@ interface DataRepository {
     suspend fun askSilently(question: String): String
     suspend fun askSilentlyWithInstance(instanceId: String, prompt: String, timeoutMs: Long = 0L): String
     suspend fun addAssistantMessage(content: String)
+
+    /**
+     * Append an assistant message to a *specific* conversation (by id), without
+     * touching the active chat. Used by the Objective manager to land continuation
+     * reports in the objective conversation they belong to.
+     */
+    suspend fun addAssistantMessageTo(conversationId: String, content: String)
 
     /**
      * Resolve the persistent heartbeat conversation's id, creating an empty
