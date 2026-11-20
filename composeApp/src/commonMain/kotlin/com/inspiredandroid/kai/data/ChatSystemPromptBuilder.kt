@@ -94,11 +94,6 @@ internal const val DEFAULT_TOOL_USE_SECTION =
         "Summarize noisy output and state any uncertainty — don't dump raw logs."
 
 /**
- * Universal acting-vs-clarifying policy composed into every chat variant. Caps the
- * model's tendency to ask multiple clarifying questions and to give up after the first
- * failed attempt. Constant rather than soul-embedded so soul customization can't drop it.
- */
-/**
  * Working modes the user switches in the chat input. PLAN disallows execution side
  * effects and demands a plan; BUILD steers work into the sandbox + GitHub Actions
  * pipeline. CHAT renders no section (zero bytes).
