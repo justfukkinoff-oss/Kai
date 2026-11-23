@@ -72,6 +72,8 @@ private fun LegalLibraryControls() {
     var metadata by remember { mutableStateOf(false) }
     var photo by remember { mutableStateOf(false) }
     var routes by remember { mutableStateOf(false) }
+    var token by remember { mutableStateOf(LegalLibrary.courtListenerToken()) }
+    var exports by remember { mutableStateOf(emptyList<JsonObject>()) }
 
     fun work(label: String, block: suspend () -> Unit) {
         if (running) return
@@ -233,6 +235,19 @@ private fun LegalLibraryControls() {
         Text("A configured remote route receives text or images used for that task. Leave it blank to keep that task local or disabled.")
         for ((role, title) in LegalLibrary.roles) LibraryRouteEditor(role, title)
     }
+    OutlinedTextField(token, { token = it }, Modifier.fillMaxWidth(), label = { Text("CourtListener API token (fallback)") },
+        singleLine = true, visualTransformation = PasswordVisualTransformation())
+    TextButton(onClick = { LegalLibrary.saveCourtListenerToken(token); message = "CourtListener settings saved." }) { Text("Save CourtListener token") }
+    TextButton(enabled = !running, onClick = {
+        work("Loading exports…") {
+            val result = LegalLibrary.call("exports")
+            exports = result.rows("files")
+            message = result.field("error").ifEmpty { "${exports.size} local exports." }
+        }
+    }) { Text("Show filing exports") }
+    for (file in exports) TextButton(enabled = !running, onClick = {
+        work("Opening export…") { message = LegalLibrary.open(file.field("path")) }
+    }) { Text(file.field("name")) }
 }
 
 @Composable

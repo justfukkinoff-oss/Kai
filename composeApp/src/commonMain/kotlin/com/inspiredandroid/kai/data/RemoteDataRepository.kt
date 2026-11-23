@@ -1059,7 +1059,7 @@ class RemoteDataRepository(
                 if (draftMode && turn.content.isNotBlank()) {
                     val draftConversation = _currentConversationId.value
                     if (draftConversation != null) backgroundScope.launch {
-                        val review = CitationCheckTool.review(turn.content, sandboxController)
+                        val review = CitationCheckTool.review(turn.content, sandboxController, draftConversation)
                         addCitationReportAfter(draftConversation, reply.id, review.message())
                     }
                 }

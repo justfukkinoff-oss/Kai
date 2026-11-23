@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import tempfile
 import time
 import unicodedata
@@ -58,10 +59,12 @@ class OpinionText(HTMLParser):
 
 
 class CourtListener:
-    def __init__(self, token, library):
+    def __init__(self, token, library, matches=None, matter=""):
         self.token = token
         self.library = library
         self.deadline = time.monotonic() + 22
+        self.matches = matches or {}
+        self.matter = matter
 
     def request(self, path, data=None):
         if not self.token:
@@ -87,7 +90,7 @@ class CourtListener:
         if not PUBLIC_CITATION.fullmatch(citation):
             return {"reason": "unsupported citation format"}
         cite_file = self.library / "reporters" / (citation + ".json")
-        cluster = self.read_cache(cite_file)
+        cluster = self.matches.get(citation) or self.read_cache(cite_file)
         if cluster is None:
             results = self.request("/api/rest/v4/citation-lookup/", urlencode({"text": citation}).encode())
             if len(results) != 1 or results[0].get("status") != 200:
@@ -104,6 +107,38 @@ class CourtListener:
             url = HOST + path
         return {"case": cluster.get("case_name"), "url": url,
                 "opinions": cluster.get("sub_opinions") or [], "reason": None}
+
+    def record(self, label, quote=None):
+        index = Path("/root/.kai/library/index.db")
+        if not self.matter or not index.is_file():
+            return []
+        match = re.fullmatch(r"(ECF(?:\s+No\.)?|Bates|Ex(?:hibit|\.)|Tr(?:anscript|\.))\s*#?\s*([\w-]+)(?:(?:\s+at\s+|:)(\d+(?:[-–]\d+)?))?", label, re.I)
+        if not match:
+            return []
+        kind, tag, pin = match.groups()
+        kind = kind.lower()
+        column = "p.ecf" if kind.startswith("ecf") else "p.bates" if kind == "bates" else "p.exhibit"
+        clauses = ["d.scope=?"]
+        args = [self.matter]
+        if kind.startswith("tr"):
+            clauses.extend(["d.doc_type LIKE '%transcript%'", "p.printed=?"])
+            args.append(tag)
+            # A line citation needs line-aware confirmation, not simply a matching page.
+            if pin:
+                return []
+        else:
+            clauses.append(f"{column}=? COLLATE NOCASE")
+            args.append(tag)
+            if pin:
+                clauses.append("p.printed=?")
+                args.append(pin)
+        try:
+            with sqlite3.connect(f"file:{index}?mode=ro", uri=True, timeout=3) as db:
+                rows = db.execute("SELECT d.title,p.number,p.method,p.raw FROM docs d JOIN pages p ON p.doc=d.id WHERE "
+                                  + " AND ".join(clauses) + " LIMIT 50", args).fetchall()
+                return [(row[0], row[1], row[2]) for row in rows if quote is None or quote in row[3]]
+        except sqlite3.Error:
+            return []
 
     def opinion(self, url):
         opinion_id = self.opinion_id(url)
@@ -297,7 +332,12 @@ def review(text, client, parse=parse_citations):
             issues.append(f"{cite['label']} ({cite['pin']}): pinpoint not independently verified.")
 
     for record in RECORD_REFERENCES.finditer(text):
-        issues.append(f"{record.group()}: record reference not verified against a source document.")
+        matches_for_record = client.record(record.group()) if hasattr(client, "record") else []
+        if len(matches_for_record) == 1:
+            title, page, method = matches_for_record[0]
+            issues.append(f"{record.group()}: identifier located in {title}, source page {page} ({method}); relevance not verified.")
+        else:
+            issues.append(f"{record.group()}: record reference not verified against a unique source page.")
 
     for number, match in enumerate(QUOTES.finditer(text), 1):
         quote = next(part for part in match.groups() if part is not None)
@@ -314,6 +354,14 @@ def review(text, client, parse=parse_citations):
         ]
         relevant = {c["reporter"] for c in following}
         if len(relevant) != 1 or None in relevant:
+            tail = text[match.end():boundary]
+            refs = list(RECORD_REFERENCES.finditer(tail))
+            if len(refs) == 1 and hasattr(client, "record") and not re.search(r'[.!?](?:\s|")+\w', tail[:refs[0].start()]):
+                record_hits = client.record(refs[0].group(), quote)
+                if len(record_hits) == 1:
+                    title, page, method = record_hits[0]
+                    issues.append(f"Quote {number}: exact source-text match in {title}, source page {page} ({method}); compare image if OCR.")
+                    continue
             issues.append(f"Quote {number}: source attribution unresolved.")
             continue
         cite = next(iter(relevant))
@@ -366,10 +414,24 @@ def review(text, client, parse=parse_citations):
 def main():
     cli = argparse.ArgumentParser()
     cli.add_argument("draft", type=Path)
+    cli.add_argument("--reporters", action="store_true")
+    cli.add_argument("--options", type=Path)
     opts = cli.parse_args()
     library = Path(os.environ.get("KAI_LAW_LIBRARY", Path.home() / ".local/share/kai/law"))
-    result = review(opts.draft.read_text(encoding="utf-8"),
-                    CourtListener(os.environ.get("COURTLISTENER_TOKEN"), library))
+    draft = opts.draft.read_text(encoding="utf-8")
+    if opts.reporters:
+        try:
+            reporters = list(dict.fromkeys(c["reporter"] for c in parse_citations(draft) if c["reporter"]))
+        except (ImportError, ValueError):
+            reporters = []
+        print("KAI_CITE_REPORTERS " + json.dumps(reporters))
+        return
+    options = {}
+    if opts.options:
+        options = json.loads(opts.options.read_text(encoding="utf-8"))
+        opts.options.unlink(missing_ok=True)
+    result = review(draft, CourtListener(options.get("token") or os.environ.get("COURTLISTENER_TOKEN"), library,
+                                        options.get("mcp"), options.get("matter", "")))
     print("KAI_CITE_CHECK_RESULT " + json.dumps(result, ensure_ascii=True))
 
 

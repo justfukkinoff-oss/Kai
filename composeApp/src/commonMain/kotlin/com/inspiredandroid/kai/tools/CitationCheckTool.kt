@@ -3,6 +3,8 @@
 package com.inspiredandroid.kai.tools
 
 import com.inspiredandroid.kai.SandboxController
+import com.inspiredandroid.kai.data.currentConversationIdOrNull
+import com.inspiredandroid.kai.mcp.McpServerManager
 import com.inspiredandroid.kai.network.tools.ParameterSchema
 import com.inspiredandroid.kai.network.tools.Tool
 import com.inspiredandroid.kai.network.tools.ToolInfo
@@ -10,10 +12,19 @@ import com.inspiredandroid.kai.network.tools.ToolSchema
 import kai.composeapp.generated.resources.Res
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import kotlin.time.Duration.Companion.seconds
@@ -43,6 +54,7 @@ internal data class CitationReview(
 
 object CitationCheckTool : Tool, KoinComponent {
     private val sandbox: SandboxController by inject()
+    private val mcp: McpServerManager by inject()
     private val json = Json { ignoreUnknownKeys = true }
     const val ID = "cite_check"
     val toolInfo = ToolInfo(id = ID, name = "Check citations", description = "Report unresolved citations, quotes and treatment")
@@ -52,7 +64,7 @@ object CitationCheckTool : Tool, KoinComponent {
         description = "Check a legal draft with local eyecite and public-case lookups. Returns notes only; never restricts the draft.",
         parameters = mapOf("draft" to ParameterSchema("string", "Legal draft text to check", true)),
     )
-    override val timeout = 55.seconds
+    override val timeout = 70.seconds
 
     override suspend fun execute(args: Map<String, Any>): Any {
         val text = args["draft"] as? String ?: return mapOf("error" to "draft is required")
@@ -60,7 +72,14 @@ object CitationCheckTool : Tool, KoinComponent {
         return mapOf("issues" to result.issues, "sources" to result.sources, "citations" to result.citations)
     }
 
-    internal suspend fun review(draft: String, controller: SandboxController): CitationReview {
+    private fun uniqueCluster(value: JsonElement?): JsonObject? {
+        if (value is JsonArray) return uniqueCluster(value.singleOrNull())
+        if (value !is JsonObject) return null
+        if (value["id"] is JsonPrimitive && value["sub_opinions"] is JsonArray && value["case_name"] is JsonPrimitive) return value
+        return listOf("clusters", "results", "data", "cluster").firstNotNullOfOrNull { uniqueCluster(value[it]) }
+    }
+
+    internal suspend fun review(draft: String, controller: SandboxController, chatId: String? = null): CitationReview {
         fun issue(text: String) = CitationReview(listOf(text))
         if (draft.isBlank()) return issue("No draft text to review.")
         if (!controller.status.value.ready) return issue("Citation check unavailable: Linux sandbox is not ready.")
@@ -70,15 +89,50 @@ object CitationCheckTool : Tool, KoinComponent {
         val directory = "/root/.kai/cite-check/$id"
         val session = "cite-check-$id"
         return try {
-            withTimeoutOrNull(40.seconds) {
+            withTimeoutOrNull(60.seconds) {
                 val script = Res.readBytes("files/legal/cite_check.py")
                 if (!controller.writeBinaryFile("$directory/check.py", script) ||
                     !controller.writeBinaryFile("$directory/draft.txt", text)
                 ) return@withTimeoutOrNull issue("Citation check unavailable: could not stage the draft locally.")
-                val output = controller.executeCommand(
-                    "python3 '$directory/check.py' '$directory/draft.txt'",
-                    session,
-                )
+                val base = "py=python3; if [ -x /root/.kai/legal-venv/bin/python ]; then py=/root/.kai/legal-venv/bin/python; fi; " +
+                    "\"\$py\" '$directory/check.py' '$directory/draft.txt'"
+                val mcpTool = mcp.compatibleTool("courtlistener", listOf("citation_lookup", "lookup_citation", "courtlistener_citation_lookup")) { tool ->
+                    val accepted = setOf("citation", "text", "query")
+                    tool.schema.parameters.any { it.key in accepted && it.value.type == "string" } &&
+                        tool.schema.parameters.count { it.value.required } <= 1 &&
+                        tool.schema.parameters.none { it.value.required && (it.key !in accepted || it.value.type != "string") }
+                }
+                val mcpMatches = if (mcpTool != null) {
+                    val param = mcpTool.schema.parameters.entries.firstOrNull { it.value.required }?.key
+                        ?: listOf("citation", "text", "query").first { mcpTool.schema.parameters[it]?.type == "string" }
+                    val extracted = controller.executeCommand("$base --reporters", session)
+                        .lineSequence().lastOrNull { it.startsWith("KAI_CITE_REPORTERS ") }?.substringAfter(' ')
+                    val citations = runCatching {
+                        extracted?.let { json.decodeFromString<List<String>>(it) }.orEmpty().take(16)
+                    }.getOrDefault(emptyList())
+                    coroutineScope {
+                        citations.map { citation ->
+                            async {
+                                val response = withTimeoutOrNull(9000) { mcpTool.execute(mapOf(param to citation)) } as? Map<*, *>
+                                val raw = response?.get("result") as? String
+                                val cluster = if (response?.get("success") == true && !raw.isNullOrBlank()) {
+                                    runCatching { uniqueCluster(json.parseToJsonElement(raw)) }.getOrNull()
+                                } else null
+                                citation to cluster
+                            }
+                        }.awaitAll()
+                    }
+                } else emptyList()
+                val scope = (chatId ?: currentConversationIdOrNull())?.let(LegalLibrary::matterFor)
+                val options = buildJsonObject {
+                    put("token", LegalLibrary.courtListenerToken())
+                    put("matter", scope.orEmpty())
+                    put("mcp", buildJsonObject { for ((citation, cluster) in mcpMatches) if (cluster != null) put(citation, cluster) })
+                }
+                if (!controller.writeBinaryFile("$directory/options.json", options.toString().encodeToByteArray())) {
+                    return@withTimeoutOrNull issue("Citation check unavailable: could not stage request.")
+                }
+                val output = controller.executeCommand("chmod 700 '$directory'; chmod 600 '$directory/options.json'; $base --options '$directory/options.json'", session)
                 val line = output.lineSequence().lastOrNull { it.startsWith("KAI_CITE_CHECK_RESULT ") }
                     ?: return@withTimeoutOrNull issue("Citation check unavailable: sandbox checker did not return a result.")
                 json.decodeFromString<CitationReview>(line.substringAfter(' '))
@@ -93,6 +147,7 @@ object CitationCheckTool : Tool, KoinComponent {
                     withTimeoutOrNull(3.seconds) {
                         controller.deleteEntry("$directory/draft.txt", recursive = false)
                         controller.deleteEntry("$directory/check.py", recursive = false)
+                        controller.deleteEntry("$directory/options.json", recursive = false)
                         controller.deleteEntry(directory, recursive = false)
                     }
                 } catch (_: Exception) {

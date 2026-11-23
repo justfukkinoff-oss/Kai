@@ -20,7 +20,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -179,9 +178,9 @@ internal object FilingExportTool : Tool, KoinComponent {
                     candidate.schema.parameters.none { (key, value) -> value.required && key !in inputs }
             } ?: continue
             val response = withTimeoutOrNull(25_000) { tool.execute(inputs) } as? Map<*, *>
-            val result = response?.get("result") as? JsonElement
-            if (response?.get("success") == true && result != null && result !is JsonArray) {
-                output = mapOf("provider" to provider, "result" to result.toString())
+            val result = response?.get("result") as? String
+            if (response?.get("success") == true && !result.isNullOrBlank()) {
+                output = mapOf("provider" to provider, "result" to result)
                 break
             }
         }
