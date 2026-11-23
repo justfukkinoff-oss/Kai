@@ -112,8 +112,6 @@ private const val MAX_API_RETRIES = 2
 private const val MAX_HEARTBEAT_MESSAGES = 50
 private const val BINARY_UPLOAD_DIR = "/root/chat-uploads/"
 private const val ESTIMATED_CHARS_PER_TOKEN = 4
-private const val COMPACTION_THRESHOLD = 0.7 // Compact when history exceeds 70% of context window
-private const val COMPACTION_KEEP_RECENT = 4 // Number of recent user exchanges to keep verbatim
 
 /**
  * The Responses API reports a failed turn inside a 200 body (`status: "failed"`), which would
@@ -1175,7 +1173,9 @@ class RemoteDataRepository(
                     )
                 }
                 val textContent = parts.filterNot { it.isThought }.mapNotNull { it.text }.joinToString("\n")
-                return LoopChatResult(textContent = textContent, toolCalls = toolCallInfos)
+                val reasoning = parts.filter { it.isThought }.mapNotNull { it.text }
+                    .joinToString("\n").ifBlank { null }
+                return LoopChatResult(textContent = textContent, toolCalls = toolCallInfos, reasoningContent = reasoning)
             }
 
             override suspend fun bailout(history: List<History>, systemPrompt: String?, reason: BailoutReason): String = plainChat(Service.Gemini, credentials, history, "${bailoutPrompt(reason)} $systemPrompt").content
@@ -1553,67 +1553,6 @@ class RemoteDataRepository(
         // Dropping from the front can cut a tool round in half; a tool result whose assistant
         // tool call was trimmed away is an orphan that strict providers reject.
         return kept.dropWhile { it.role == History.Role.TOOL }
-    }
-
-    /**
-     * Compacts chat history by summarizing older messages via an LLM call when the history
-     * exceeds a percentage of the context window. Keeps recent exchanges verbatim and replaces
-     * older ones with a single summary. If summarization fails, drops the older turns only when the
-     * history no longer fits the context window; cancellation propagates without touching history.
-     */
-    private suspend fun compactHistoryIfNeeded() {
-        // Use primary service's context window for compaction decisions
-        val firstInstance = getConfiguredServiceInstances().firstOrNull() ?: return
-        val service = Service.fromId(firstInstance.serviceId)
-        val modelId = appSettings.getSelectedModelId(service)
-        val contextWindowTokens = ModelCatalog.estimateContextWindow(modelId)
-
-        val history = chatHistory.value.filter { it.role != History.Role.TOOL_EXECUTING }
-        val systemPromptChars = getActiveSystemPrompt()?.length ?: 0
-        val totalChars = history.sumOf { it.content.length } + systemPromptChars
-        val maxChars = contextWindowTokens * ESTIMATED_CHARS_PER_TOKEN
-        if (totalChars <= (maxChars * COMPACTION_THRESHOLD).toInt()) return
-
-        // Split history: older messages to summarize, recent to keep verbatim
-        val userIndices = history.mapIndexedNotNull { index, h ->
-            if (h.role == History.Role.USER) index else null
-        }
-        if (userIndices.size <= COMPACTION_KEEP_RECENT) return
-        val cutoffIndex = userIndices[userIndices.size - COMPACTION_KEEP_RECENT]
-        val olderMessages = history.subList(0, cutoffIndex)
-        val recentMessages = history.subList(cutoffIndex, history.size)
-
-        if (olderMessages.isEmpty()) return
-
-        // Build a transcript of the older messages for summarization
-        val transcript = buildString {
-            for (msg in olderMessages) {
-                if (msg.role == History.Role.USER || msg.role == History.Role.ASSISTANT) {
-                    val role = if (msg.role == History.Role.USER) "User" else "Assistant"
-                    appendLine("$role: ${msg.content}")
-                }
-            }
-        }
-
-        val summaryPrompt = "Summarize this conversation concisely, preserving key facts, decisions, and any information the assistant would need to continue helping. Be brief but complete:\n\n$transcript"
-
-        val summary = try {
-            askSilently(summaryPrompt)
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            // Summarization failed (offline, rate limit, …). While the history still fits the
-            // context window, keep every turn — a transient error must not erase the conversation.
-            // Only when it no longer fits at all, drop the older turns so the chat can continue.
-            if (totalChars > maxChars) chatHistory.value = recentMessages
-            return
-        }
-
-        val summaryEntry = History(
-            role = History.Role.ASSISTANT,
-            content = "[Conversation summary: $summary]",
-        )
-
-        chatHistory.value = listOf(summaryEntry) + recentMessages
     }
 
     private fun trimToRecentExchanges(history: List<History>, maxExchanges: Int): List<History> {
