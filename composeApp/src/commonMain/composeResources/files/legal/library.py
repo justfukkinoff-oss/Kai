@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import sqlite3
@@ -48,6 +49,8 @@ def connect():
         PRIMARY KEY(key,chunk));
       CREATE TABLE IF NOT EXISTS vectors(chunk INTEGER REFERENCES chunks(id) ON DELETE CASCADE,
         route TEXT, value BLOB, PRIMARY KEY(chunk,route));
+      CREATE TABLE IF NOT EXISTS doc_sources(doc TEXT PRIMARY KEY REFERENCES docs(id) ON DELETE CASCADE,
+        url TEXT NOT NULL, cache_id TEXT UNIQUE);
       CREATE INDEX IF NOT EXISTS chunks_by_doc ON chunks(doc,page);
       CREATE INDEX IF NOT EXISTS vectors_by_route ON vectors(route);
       CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(text,heading,tokenize='porter unicode61');
@@ -367,6 +370,45 @@ def locate(request):
     return " AND ".join(where), params
 
 
+def sync_public_opinions(db, work):
+    cache = Path(os.environ.get("KAI_LAW_LIBRARY", Path.home() / ".local/share/kai/law"))
+    opinions = cache / "opinions"
+    if not opinions.is_dir():
+        return
+    linked = {row[0] for row in db.execute("SELECT cache_id FROM doc_sources WHERE cache_id IS NOT NULL")}
+    candidates = [(p.stem, p) for p in opinions.glob("*.json") if p.stem.isdigit() and p.stem not in linked]
+    if not candidates:
+        return
+    titles = {}
+    for file in (cache / "reporters").glob("*.json"):
+        try:
+            item = json.loads(file.read_text(encoding="utf-8"))
+            for opinion in item.get("sub_opinions") or []:
+                found = re.search(r"(?:^|/)opinions/(\d+)/?$", str(opinion))
+                identifier = found[1] if found else str(opinion)
+                titles[identifier] = f"{item.get('case_name') or 'CourtListener opinion'}, {file.stem}"
+        except (ValueError, OSError, TypeError, AttributeError):
+            continue
+    completed = 0
+    for identifier, file in sorted(candidates, key=lambda pair: (pair[0] not in titles, pair[0])):
+        if completed >= 8:
+            break
+        try:
+            item = json.loads(file.read_text(encoding="utf-8"))
+            link = item.get("link") or ""
+            if not re.fullmatch(r"https://www\.courtlistener\.com/opinion/\d+/", link) or not item.get("text", "").strip():
+                continue
+            text = file_temp = work / "public-opinion.txt"
+            text.write_text(item["text"], encoding="utf-8")
+            response = ingest(db, {"path": str(file_temp), "title": titles.get(identifier, f"CourtListener opinion {identifier}") + ".txt",
+                                   "doc_type": "opinion", "embed": False}, "law", {}, work)
+            with db:
+                db.execute("INSERT OR IGNORE INTO doc_sources VALUES(?,?,?)", (response["document"], link, identifier))
+            completed += 1
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+
+
 def search(db, request, routes):
     query = request.get("query", "").strip()
     if not query:
@@ -420,7 +462,7 @@ def search(db, request, routes):
             fused[identifier] += (1.5 if name in ("exact","identifier") else 1.0)/(60+ordinal)
             channels[identifier].append(name)
     ordered = sorted(fused,key=lambda cid:(not any(x in channels[cid] for x in ("exact","identifier")),-fused[cid],cid))[:36]
-    fields = "c.*,d.title,d.origin,d.doc_type,d.court,d.docket,p.printed,p.bates,p.ecf,p.exhibit,p.method"
+    fields = "c.*,d.title,d.origin,d.doc_type,d.court,d.docket,p.printed,p.bates,p.ecf,p.exhibit,p.method,(SELECT url FROM doc_sources WHERE doc=d.id) AS source_url"
     rows = {}
     if ordered:
         marks = ",".join("?" for _ in ordered)
@@ -461,12 +503,17 @@ def dispatch(db, r, work):
     if action == "ingest":
         return ingest(db,r,scope,routes,work)
     if action == "list":
+        if scope == "law":
+            sync_public_opinions(db, work)
         tag = fingerprint(routes["embedding"]) if routes.get("embedding") else ""
         return {"documents":[dict(row) for row in db.execute("""SELECT d.*, (SELECT count(*) FROM chunks c WHERE c.doc=d.id) passages,
             (SELECT count(*) FROM pages p WHERE p.doc=d.id AND length(trim(p.raw))=0) needs_ocr,
-            (SELECT count(*) FROM chunks c JOIN vectors v ON c.id=v.chunk WHERE c.doc=d.id AND v.route=?) embedded
+            (SELECT count(*) FROM chunks c JOIN vectors v ON c.id=v.chunk WHERE c.doc=d.id AND v.route=?) embedded,
+            (SELECT url FROM doc_sources WHERE doc=d.id) source_url
             FROM docs d WHERE d.scope=? ORDER BY d.title""",(tag,scope))]}
     if action == "search":
+        if scope == "law":
+            sync_public_opinions(db, work)
         return search(db,r,routes)
     if action in ("read","quote","delete","reembed","reindex"):
         doc = db.execute("SELECT * FROM docs WHERE id=? AND scope=?",(r.get("document"),scope)).fetchone()
@@ -488,6 +535,9 @@ def dispatch(db, r, work):
         info = dict(row)
         raw, offset = info.pop("raw"), max(0,int(r.get("offset",0)))
         info.update(path=doc["origin"],title=doc["title"])
+        source = db.execute("SELECT url FROM doc_sources WHERE doc=?", (doc["id"],)).fetchone()
+        if source:
+            info["source_url"] = source[0]
         if action == "quote":
             quote = r.get("query","").strip()
             hit = raw.find(quote) if quote else -1

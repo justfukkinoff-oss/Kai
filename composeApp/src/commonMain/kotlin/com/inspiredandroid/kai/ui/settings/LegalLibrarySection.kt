@@ -21,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.inspiredandroid.kai.tools.LegalLibrary
@@ -53,6 +54,7 @@ internal fun LegalLibrarySection() {
 @Composable
 private fun LegalLibraryControls() {
     val coroutine = rememberCoroutineScope()
+    val uriHandler = LocalUriHandler.current
     var active by remember { mutableStateOf<Job?>(null) }
     var running by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("Start the Linux sandbox, then refresh the library.") }
@@ -210,7 +212,14 @@ private fun LegalLibraryControls() {
                     pageText = result.field("text")
                     message = result.field("error").ifEmpty { "Source page ${hit.field("page")}." }
                 } }) { Text("Read page text") }
-                TextButton(enabled = !running, onClick = { work("Opening original…") { message = LegalLibrary.open(hit.field("origin")) } }) { Text("Open original") }
+                val source = hit.field("source_url")
+                if (source.matches(Regex("https://www\\.courtlistener\\.com/opinion/\\d+/"))) {
+                    TextButton(onClick = {
+                        runCatching { uriHandler.openUri(source) }.onFailure { message = "Could not open CourtListener." }
+                    }) { Text("CourtListener") }
+                } else {
+                    TextButton(enabled = !running, onClick = { work("Opening original…") { message = LegalLibrary.open(hit.field("origin")) } }) { Text("Open original") }
+                }
             }
         }
         for (doc in documents) {

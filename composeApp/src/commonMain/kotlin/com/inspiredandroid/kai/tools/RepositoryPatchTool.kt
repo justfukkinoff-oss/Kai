@@ -44,7 +44,7 @@ internal object RepositoryPatchTool : Tool, KoinComponent {
                     "n=\$($git log -1 --format=%s --grep='^wip: objective step [0-9][0-9]*$' | sed 's/.* //'); " +
                     "case \"\$n\" in ''|*[!0-9]*) n=0 ;; esac; " +
                     "$git add -A && $git -c core.hooksPath=/dev/null commit --allow-empty " +
-                    "-m \"wip: objective step \$((n+1))\" && printf '\\nKAI_PATCH_CHECKPOINT ' && $git rev-parse HEAD",
+                    "-m \"wip: objective step \$((n+1))\" && printf '\\nKAI_PATCH_CHECKPOINT ' >&2 && $git rev-parse HEAD >&2",
                 session,
             )
             val marker = checkpoint.lineSequence().lastOrNull { it.startsWith("KAI_PATCH_CHECKPOINT ") }
@@ -53,7 +53,7 @@ internal object RepositoryPatchTool : Tool, KoinComponent {
                 return@withLock "Checkpoint created but the patch could not be staged."
             }
             val output = sandbox.executeCommand(
-                "$git apply --check ${quote(patch)} && $git apply ${quote(patch)} && printf '\\nKAI_PATCH_APPLIED\\n' && $git diff --stat",
+                "$git apply --check ${quote(patch)} && $git apply ${quote(patch)} && printf '\\nKAI_PATCH_APPLIED\\n' >&2 && $git diff --stat",
                 session,
             )
             if (output.lineSequence().any { it.trim() == "KAI_PATCH_APPLIED" }) "$marker\n$output"

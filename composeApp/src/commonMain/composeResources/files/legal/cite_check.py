@@ -99,7 +99,7 @@ class CourtListener:
             if len(clusters) != 1:
                 return {"reason": "ambiguous CourtListener match"}
             cluster = clusters[0]
-            self.write_cache(cite_file, cluster)
+        self.write_cache(cite_file, cluster)
         cluster_id = cluster.get("id")
         url = f"{HOST}/opinion/{cluster_id}/" if isinstance(cluster_id, int) else None
         path = cluster.get("absolute_url")
