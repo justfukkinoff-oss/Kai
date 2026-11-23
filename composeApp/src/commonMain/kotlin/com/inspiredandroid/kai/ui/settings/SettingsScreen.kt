@@ -270,6 +270,7 @@ fun SettingsScreenContent(
 
                             SettingsTab.Agent -> {
                                 AgentContent(uiState = filteredUiState, actions = actions)
+                                LegalLibrarySection()
                             }
 
                             SettingsTab.Services -> {
