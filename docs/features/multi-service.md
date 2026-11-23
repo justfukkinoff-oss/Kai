@@ -47,6 +47,10 @@ When Free is the only path and the user hits Free FAST/EXPERT rate or quota limi
 11. On-device entries are also never used as fallback targets: a local model is only tried when it is the primary (first) service in the chain. A cloud-service failure never silently starts a local model load
 12. Errors that a retry can't fix skip further **per-service** retries and fail that service immediately: exhausted credits or quota, an invalid API key, an unknown model, a request the provider rejects as malformed, too large or disallowed by moderation, a history that exceeds the context window, and attachments rejected locally for size or type. Unknown or generic errors stay retryable. The fallback chain still continues to the next instance. Only on-device (Local Model) failures short-circuit the entire chain
 
+## Working mode routes
+
+Open a mode in the normal chat composer and use its model picker to select a configured provider/model instance for Plan, Build, Research, or Draft. Each choice is remembered independently. **Chat default** restores the normal Chat priority and fallback order for that mode. If you explicitly select an instance, a failed request does not switch that mode's content to a different provider. Scheduled Objective recovery uses the separately configured Heartbeat route.
+
 ## API Formats
 
 Most services use the **OpenAI-compatible** chat completions format. **Gemini** uses Google's native Generative Language API. **Anthropic** uses its own Messages API with `x-api-key` header authentication and a different request/response structure. **LiteRT** runs inference on-device using Google's LiteRT LM SDK -- no HTTP, no API key, fully offline.

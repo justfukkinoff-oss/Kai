@@ -14,7 +14,7 @@ Kai has several distinct prompt-construction paths. Each one is built by a **pur
 | Objective recovery | Dedicated recovery system prompt plus spec and checkpoint | `ObjectiveRecoveryTest` | Scheduler, without the ambient chat prompt, memories, or chat history |
 | Splinterlands LLM picker | `buildLlmPrompt(…)` in `SplinterlandsTeamPicker.kt` | `SplinterlandsTeamPickerPromptTest` | `SplinterlandsBattleRunner` — fully isolated, does not use the chat prompt builder |
 
-The on-device tool allowlist (`LOCAL_TOOL_ALLOWLIST` in `RemoteDataRepository.kt`) decides which tools reach the on-device engine. Renaming a tool without updating that set silently drops it from the on-device path.
+Each tool-enabled request receives the names and schemas of the callable tools registered for that platform and configuration. Models without function-calling support get a plain chat request instead. Foreground chat also receives conversation-scoped recall when the request history no longer includes earlier work.
 
 ## Chat variants
 
@@ -27,7 +27,7 @@ The on-device tool allowlist (`LOCAL_TOOL_ALLOWLIST` in `RemoteDataRepository.kt
 | `## Tool Use` | when tools available | when tools available | baked into `DEFAULT_TOOL_USE_SECTION` constant — tells the model to reach for tools to resolve ambiguity, check tool availability before declaring a capability unavailable, prefer self-lookup over asking the user, and extract signal from noisy output. Gated on `hasTools`: with every tool disabled (or a model that doesn't support tool calls) the section is dropped rather than telling the model to use tools it doesn't have. Soul customization still can't drop it while tools exist |
 | `## When to Act` | always | always | baked into `DEFAULT_ACTING_SECTION` constant — caps clarifying questions at one, only when genuinely blocked; demands recovery after a failed first attempt; mandates seeing work through to a usable result. Always rendered (both variants), same rationale as above |
 | Memory instructions (basic) | when memory enabled | when memory enabled | Memory toggle on and the memory-instructions setting non-empty |
-| `## Structured Learning` | when memory enabled (remote-only) | never | baked into `DEFAULT_STRUCTURED_LEARNING_SECTION` constant. Gated on `memoryEnabled` — it references `memory_learn` / `memory_reinforce`, which are absent when memory is off |
+| `## Structured Learning` | when shared-memory injection is enabled | never | Explains categorization and reinforcement for shared memories. It does not determine which tools are callable. |
 | `## Your Memories` | when list non-empty | when list non-empty (budget-capped) | `generalMemories` |
 | `## User Preferences` | when list non-empty | when list non-empty (budget-capped) | `preferenceMemories` |
 | `## Learnings` | when list non-empty | when list non-empty (budget-capped) | `learningMemories` (reinforcement count rendered) |
@@ -38,8 +38,8 @@ The on-device tool allowlist (`LOCAL_TOOL_ALLOWLIST` in `RemoteDataRepository.kt
 | `## Heartbeat Additions` | when list non-empty | never | `heartbeatAdditions` — standing `schedule_task(on_heartbeat=true)` entries the AI can see/reference/cancel |
 | `## Active skill: <name>` | when activated | when activated | `activeSkill` param — non-null only when the user prefixed the current turn's message with `/<skill-id>` matching an installed, enabled skill. Emits the skill's instruction body plus a list of any bundled files (available at `~/skills/<id>/` in the sandbox). Zero bytes on every other turn. See [skills.md](skills.md) |
 | `## Context` | always | always | `runtime` param (local time with offset + IANA zone, UTC, platform, model, provider). Local time leads so the model anchors on the user's wall clock when computing relative times |
-| Active mode | Chat: none; other modes: always | Same as remote | Plan describes read-only planning; Build delegates to GitHub Actions; Research requests primary sources and pinpoints; Draft requires a review-only result. These prompt instructions do not enforce tool permissions. |
-| `## Objective` | when an objective is set on the conversation | never | `activeObjective` param (`ActiveObjectiveContext` from `ObjectiveStore`) — goal, lifecycle status, attempt count, latest summary, plus instructions to self-report via `objective_set_status` |
+| Active mode | Chat: none; other modes: always | Same as remote | Plan describes read-only planning; Build delegates to GitHub Actions; Research requests primary sources and pinpoints; Draft receives a non-blocking citation report. |
+| `## Objective` | when an objective is set on the conversation | same as remote | Goal, lifecycle status, attempt count, latest summary, plus instructions to self-report via `objective_set_status`. |
 | `## Dynamic UI` | when Dynamic UI is enabled in settings and the model supports tool calls (not in interactive mode) | never | Dynamic UI setting + model tool support |
 | `## Interactive UI Mode` | when the conversation is in interactive mode | never | Interactive mode flag (takes precedence over Dynamic UI) |
 
@@ -48,7 +48,7 @@ The on-device tool allowlist (`LOCAL_TOOL_ALLOWLIST` in `RemoteDataRepository.kt
 **Why two variants:**
 
 - `CHAT_REMOTE` — full chat prompt for remote services. No limits.
-- `CHAT_LOCAL` — trimmed chat prompt for on-device LiteRT. Small Gemma models (2-4B params) can't coherently attend to the full remote prompt, so Structured Learning, Automation, Email Accounts, Scheduled Tasks, Heartbeat Additions, and kai-ui sections are dropped, and memory sections are char-capped. The model still gets soul + basic memory guidance + memories (up to the cap) + runtime Context — memories matter because `memory_store` / `memory_forget` / `memory_reinforce` are all in the local tool allowlist, and a memory might have been learned via a remote model in an earlier turn.
+- `CHAT_LOCAL` is trimmed to conserve context on LiteRT. The shorter prompt does not remove registered tools from a compatible model.
 
 Interactive UI mode is **not** available on on-device services — the kai-ui component schema is too large for small Gemma models to coherently attend to, and in practice the model can't produce valid kai-ui JSON. The "Start interactive mode" button in the empty-state UI is hidden when the primary service is on-device (see `ChatScreen.kt`). If you have LiteRT selected and need interactive UI mode, switch to a remote service first.
 

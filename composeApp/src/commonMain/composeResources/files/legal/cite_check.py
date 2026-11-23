@@ -22,7 +22,9 @@ PUBLIC_CITATION = re.compile(r"\d{1,8} [A-Za-z0-9. ]{1,30} \d{1,9}")
 QUOTES = re.compile(r'“([^”\n]+)”|"([^"\n]+)"|((?:^>[^\n]+(?:\n|$))+)', re.MULTILINE)
 RECORD_REFERENCES = re.compile(
     r"\b(?:ECF(?:\s+No\.)?\s*#?\s*\d+(?:-\d+)?(?:\s+at\s+\d+)?|"
-    r"(?:Bates|Ex(?:hibit)?\.?|Tr(?:anscript)?\.?)\s+[A-Z0-9][A-Z0-9-]*(?::\d+(?:[-–]\d+)?)?)\b",
+    r"Bates\s+[A-Z0-9-]*\d[A-Z0-9-]*|"
+    r"Ex(?:hibit|\.)\s+(?:[A-Z](?:-\d+)?|\d+[A-Z]?)|"
+    r"Tr(?:anscript|\.)\s+\d+(?::\d+(?:[-–]\d+)?)?)\b",
     re.IGNORECASE,
 )
 TREATMENT = "subsequent treatment not verified"

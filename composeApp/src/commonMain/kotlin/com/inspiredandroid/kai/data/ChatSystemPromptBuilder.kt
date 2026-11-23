@@ -193,10 +193,8 @@ internal const val DEFAULT_ACTING_SECTION =
         "See work through to a usable result."
 
 /**
- * Advanced memory guidance — references `memory_learn` (not in `LOCAL_TOOL_ALLOWLIST`)
- * and `memory_reinforce`. Only composed into the `CHAT_REMOTE` variant; the on-device
- * variant omits it entirely because small Gemma models can't reliably call
- * `memory_learn` (4 params + enum).
+ * Advanced memory guidance for remote chat. The local prompt leaves this out to
+ * conserve context; compatible local models still receive the tool schemas.
  */
 internal const val DEFAULT_STRUCTURED_LEARNING_SECTION =
     "## Structured Learning\n" +
@@ -288,9 +286,8 @@ internal fun buildChatSystemPrompt(
         append(memoryInstructions)
     }
 
-    // Structured Learning references memory_learn / memory_reinforce, so it only makes sense
-    // when memory is enabled (those tools are absent otherwise). Remote-only — memory_learn
-    // isn't in the local allowlist.
+    // Structured Learning is guidance for the shared-memory feature. Local prompts
+    // omit the prose to conserve context, not to limit the tool set.
     if (variant == SystemPromptVariant.CHAT_REMOTE && memoryEnabled) {
         if (isNotEmpty()) append("\n\n")
         append(DEFAULT_STRUCTURED_LEARNING_SECTION)
