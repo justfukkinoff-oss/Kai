@@ -44,6 +44,7 @@ data class Conversation(
         val attachments: List<Attachment> = emptyList(),
         val uiSubmission: UiSubmission? = null,
         val isThinking: Boolean = false,
+        val toolName: String? = null,
         // Most messages have no reasoning trace; skip the null to keep the persisted blob lean.
         @EncodeDefault(EncodeDefault.Mode.NEVER)
         val reasoningContent: String? = null,

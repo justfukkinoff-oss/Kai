@@ -79,6 +79,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -184,6 +186,7 @@ class RemoteDataRepository(
 
     private val prettyJson = Json { prettyPrint = true }
     private val continuity = ConversationContinuity(appSettings)
+    private val conversationWriteMutex = Mutex()
     private val backgroundScope = CoroutineScope(SupervisorJob() + getBackgroundDispatcher())
 
     /**
@@ -1568,7 +1571,7 @@ class RemoteDataRepository(
         return (systemPrompt.orEmpty() + continuity.context(id, messages)).ifEmpty { null }
     }
 
-    private suspend fun saveCurrentConversation() {
+    private suspend fun saveCurrentConversation() = conversationWriteMutex.withLock {
         val history = trimToRecentExchanges(chatHistory.value, 20)
         if (history.isEmpty()) return
 
@@ -1606,6 +1609,7 @@ class RemoteDataRepository(
                         attachments = h.attachments,
                         uiSubmission = h.uiSubmission,
                         isThinking = h.isThinking,
+                        toolName = h.toolName,
                         reasoningContent = h.reasoningContent,
                     )
                 },
@@ -1698,12 +1702,13 @@ class RemoteDataRepository(
                 attachments = attachments,
                 uiSubmission = m.uiSubmission,
                 isThinking = m.isThinking,
+                toolName = m.toolName,
                 reasoningContent = m.reasoningContent,
             )
         }
     }
 
-    override suspend fun deleteConversation(id: String) {
+    override suspend fun deleteConversation(id: String) = conversationWriteMutex.withLock {
         if (_currentConversationId.value == id) {
             setCurrentConversationId(null)
             chatHistory.value = emptyList()
@@ -2427,11 +2432,19 @@ class RemoteDataRepository(
         conversationStorage.saveConversation(conversation)
     }
 
-    override suspend fun addAssistantMessageTo(conversationId: String, content: String, reasoningContent: String?) {
+    override suspend fun addAssistantMessageTo(
+        conversationId: String,
+        content: String,
+        reasoningContent: String?,
+        toolActivity: List<String>,
+    ) = conversationWriteMutex.withLock {
         val now = Clock.System.now().toEpochMilliseconds()
 
         val existing = savedConversations.value.find { it.id == conversationId } ?: return
 
+        val toolMessages = toolActivity.takeLast(60).map { name ->
+            Conversation.Message(id = Uuid.random().toString(), role = "tool", content = "", toolName = name)
+        }
         val newMessage = Conversation.Message(
             id = Uuid.random().toString(),
             role = "assistant",
@@ -2441,7 +2454,7 @@ class RemoteDataRepository(
 
         // Objective continuations can run long — use the heartbeat-sized cap.
         val cap = MAX_HEARTBEAT_MESSAGES
-        val messages = (existing.messages + newMessage).takeLast(cap)
+        val messages = (existing.messages + toolMessages + newMessage).takeLast(cap)
 
         val conversation = Conversation(
             id = conversationId,
@@ -2452,9 +2465,14 @@ class RemoteDataRepository(
             type = existing.type,
         )
 
+        continuity.write(conversationId, listOf(ContinuityEntry(newMessage.id, "Assistant", continuityExcerpt(content))))
         conversationStorage.saveConversation(conversation)
         if (_currentConversationId.value == conversationId) {
-            chatHistory.update { it + History(id = newMessage.id, role = History.Role.ASSISTANT, content = content, reasoningContent = reasoningContent) }
+            chatHistory.update { history ->
+                history + toolMessages.map {
+                    History(id = it.id, role = History.Role.TOOL, content = "", toolName = it.toolName)
+                } + History(id = newMessage.id, role = History.Role.ASSISTANT, content = content, reasoningContent = reasoningContent)
+            }
         }
     }
 

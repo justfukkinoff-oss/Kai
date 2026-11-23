@@ -440,7 +440,7 @@ class FakeDataRepository : DataRepository {
             ObjectiveState(goal = objectiveGoal, status = objectiveStatus)
         }
 
-    override suspend fun addAssistantMessageTo(conversationId: String, content: String, reasoningContent: String?) {}
+    override suspend fun addAssistantMessageTo(conversationId: String, content: String, reasoningContent: String?, toolActivity: List<String>) {}
 
     private var memoryEnabled = true
     private val memories = mutableListOf<MemoryEntry>()

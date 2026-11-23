@@ -129,7 +129,7 @@ class ObjectiveManager(
 
     private suspend fun runContinuation(conversationId: String, state: ObjectiveState, instanceId: String?) {
         mutableActivity.value = ObjectiveActivity(conversationId)
-        var reasoning: String? = null
+        var observations = emptyList<History>()
         try {
             val response = withTimeoutOrNull(ObjectiveTiming.RUN_TIMEOUT_MS) {
                 dataRepository.askWithTools(
@@ -139,7 +139,7 @@ class ObjectiveManager(
                     objectiveRunAtMs = state.lastRunAtMs,
                     onActivity = { entries ->
                         val visible = entries.filter { it.role != History.Role.USER }
-                        reasoning = visible.lastOrNull()?.reasoningContent ?: reasoning
+                        observations = visible
                         mutableActivity.value = ObjectiveActivity(conversationId, visible)
                     },
                 )
@@ -147,7 +147,12 @@ class ObjectiveManager(
             if (response == null) {
                 markFailed(conversationId, state)
             } else if (response.isNotBlank()) {
-                dataRepository.addAssistantMessageTo(conversationId, response, reasoning)
+                val reasoning = observations.mapNotNull {
+                    it.reasoningContent?.takeIf(String::isNotBlank)
+                        ?: it.content.takeIf { text -> it.isThinking && text.isNotBlank() }
+                }.distinct().joinToString("\n\n").ifBlank { null }
+                val tools = observations.filter { it.role == History.Role.TOOL }.mapNotNull { it.toolName }
+                dataRepository.addAssistantMessageTo(conversationId, response, reasoning, tools)
             }
             // No status flip here: the agent reports through the objective_set_status tool.
             // A run that neither completes nor fails is still active and re-visited.

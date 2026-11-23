@@ -791,7 +791,10 @@ private fun ChatModeScreen(
                                             // capture its reasoning, attach to the eventual answer.
                                             entry.reasoningContent
                                                 ?.takeIf { it.isNotBlank() }
-                                                ?.let { pending.add(it) }
+                                                ?.let {
+                                                    pending.add(it)
+                                                    pendingThinkingIds.add(entry.id)
+                                                }
                                         }
                                     }
                                 }
@@ -868,9 +871,9 @@ private fun ChatModeScreen(
                                                             modifier = Modifier.padding(start = 16.dp, bottom = 8.dp),
                                                         )
                                                     }
-                                                } else if (history.isThinking &&
-                                                    history.content.isNotEmpty() &&
-                                                    history.id !in suppressedThinkingIds
+                                                } else if (history.id !in suppressedThinkingIds &&
+                                                    (reasoningSegmentsByAssistantId[history.id] != null ||
+                                                        (history.isThinking && history.content.isNotEmpty()))
                                                 ) {
                                                     // Thinking-only turn still in flight — render as a standalone
                                                     // reasoning bubble. The precomputation above has already gathered
@@ -894,7 +897,7 @@ private fun ChatModeScreen(
                                                 val name = history.toolName
                                                 if (!name.isNullOrBlank()) {
                                                     Text(
-                                                        text = "$name · completed",
+                                                        text = stringResource(Res.string.tool_returned, name),
                                                         style = MaterialTheme.typography.labelSmall,
                                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 3.dp),
