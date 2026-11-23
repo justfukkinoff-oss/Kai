@@ -154,7 +154,7 @@ class CourtListener:
                 if not citing_id or citing_id in seen:
                     continue
                 seen.add(citing_id)
-                opinion = self.opinion(citing_id)
+                opinion = self.opinion(int(citing_id))
                 if not opinion:
                     continue
                 inspected += 1

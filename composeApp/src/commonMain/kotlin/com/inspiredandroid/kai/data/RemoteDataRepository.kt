@@ -518,7 +518,7 @@ class RemoteDataRepository(
         // Callers pass either a CHAT_LOCAL system prompt (chat + silent paths) or null
         // (Splinterlands via `askSilentlyWithInstance`, where the caller owns the full
         // prompt shape). We hand whichever one through to the engine unchanged.
-        // Native litert-lm `automaticToolCalling` owns the tool loop — our allowlisted
+        // Native litert-lm `automaticToolCalling` owns the tool loop — the registered
         // tools are passed once via [localToolDescriptionJson] and the engine drives them.
         val objectiveRecovery = currentObjectiveRun() != null
         val localTools: List<LocalTool> = if (localModelDeclaresTools(model.id)) {
@@ -560,10 +560,9 @@ class RemoteDataRepository(
 
     /**
      * Cached OpenAPI/OpenAI-style JSON descriptions for local tools, keyed by tool name.
-     * Schemas are static for allowlisted tools, so serializing them once per tool avoids
-     * re-running the JSON builder on every message.
+     * Key by schema, not name: a reconnected MCP server can revise a tool's parameters.
      */
-    private val localToolDescriptionJsonCache = mutableMapOf<String, String>()
+    private val localToolDescriptionJsonCache = mutableMapOf<com.inspiredandroid.kai.network.tools.ToolSchema, String>()
 
     /**
      * Returns the cached OpenAPI/OpenAI-style JSON description for [tool], building it on
@@ -573,7 +572,7 @@ class RemoteDataRepository(
      * it's passed through verbatim — that preserves array/enum/nested-object shapes the
      * simple `{type, description}` form would lose.
      */
-    private fun localToolDescriptionJson(tool: Tool): String = localToolDescriptionJsonCache.getOrPut(tool.schema.name) {
+    private fun localToolDescriptionJson(tool: Tool): String = localToolDescriptionJsonCache.getOrPut(tool.schema) {
         buildJsonObject {
             put("name", tool.schema.name)
             put("description", tool.schema.description)
@@ -2263,8 +2262,7 @@ class RemoteDataRepository(
         objectiveRunAtMs: Long?,
         onActivity: ((List<History>) -> Unit)?,
     ): String {
-        // Selection: explicit instance > first remote > first on-device. The simple-tool
-        // allowlist works at any context size, so on-device is always eligible for fallback.
+        // Selection: explicit instance > first remote > first on-device.
         val instances = getConfiguredServiceInstances()
         val targetInstance = instanceId?.let { id -> instances.find { it.instanceId == id } }
             ?: if (objectiveRunAtMs != null && instanceId != null) {
@@ -2432,7 +2430,7 @@ class RemoteDataRepository(
     override suspend fun addAssistantMessageTo(conversationId: String, content: String, reasoningContent: String?) {
         val now = Clock.System.now().toEpochMilliseconds()
 
-        val existing = savedConversations.value.find { it.id == conversationId }
+        val existing = savedConversations.value.find { it.id == conversationId } ?: return
 
         val newMessage = Conversation.Message(
             id = Uuid.random().toString(),
@@ -2443,14 +2441,15 @@ class RemoteDataRepository(
 
         // Objective continuations can run long — use the heartbeat-sized cap.
         val cap = MAX_HEARTBEAT_MESSAGES
-        val messages = ((existing?.messages ?: emptyList()) + newMessage).takeLast(cap)
+        val messages = (existing.messages + newMessage).takeLast(cap)
 
         val conversation = Conversation(
             id = conversationId,
             messages = messages,
-            createdAt = existing?.createdAt ?: now,
+            createdAt = existing.createdAt,
             updatedAt = now,
-            type = existing?.type ?: Conversation.TYPE_OBJECTIVE,
+            title = existing.title,
+            type = existing.type,
         )
 
         conversationStorage.saveConversation(conversation)

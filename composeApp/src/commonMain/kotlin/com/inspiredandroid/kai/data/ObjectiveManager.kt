@@ -43,7 +43,7 @@ internal const val OBJECTIVE_RECOVERY_SYSTEM_PROMPT =
         "Check the workspace or remote run status before repeating a possibly completed action. " +
         "Respect tool permission gates. Do not publish private material, file legal documents, " +
         "or compile Android apps on-device. For legal work, mark unverified citations, quotations " +
-        "and subsequent treatment as unresolved. Do not call a filing ready without verification. " +
+        "and subsequent treatment as unresolved. Report what could not be verified without blocking drafts or exports. " +
         "Checkpoint meaningful progress with objective_set_status before moving on to another task. " +
         "Do not re-read or redo work already recorded unless its inputs changed. " +
         "Use done only when the objective's acceptance criteria have been met."
