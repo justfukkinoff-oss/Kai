@@ -28,6 +28,7 @@ fun buildAgentToolSet(
     add(CitationCheckTool)
     addAll(LegalLibraryTools.tools)
     add(FilingExportTool)
+    add(RepositoryPatchTool)
 
     addAll(CommonTools.getMemoryTools(memoryStore))
 
