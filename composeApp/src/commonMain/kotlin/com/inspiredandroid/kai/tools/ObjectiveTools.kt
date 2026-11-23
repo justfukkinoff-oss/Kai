@@ -1,6 +1,7 @@
 package com.inspiredandroid.kai.tools
 
 import com.inspiredandroid.kai.data.currentConversationIdOrNull
+import com.inspiredandroid.kai.data.currentObjectiveRun
 import com.inspiredandroid.kai.data.ObjectiveStatus
 import com.inspiredandroid.kai.data.ObjectiveStore
 import com.inspiredandroid.kai.network.tools.ParameterSchema
@@ -32,6 +33,10 @@ object ObjectiveStatusTool : Tool, KoinComponent {
         parameters = mapOf(
             "status" to ParameterSchema("string", "running | done | failed", true),
             "summary" to ParameterSchema("string", "Short factual progress report or blocker", true),
+            "completed_steps" to ParameterSchema("string", "Cumulative completed steps, compact", false),
+            "current_blocker" to ParameterSchema("string", "Current blocker; empty if resolved", false),
+            "next_action" to ParameterSchema("string", "Next concrete action; empty when done", false),
+            "key_findings" to ParameterSchema("string", "Cumulative findings or source citations", false),
         ),
     )
 
@@ -44,15 +49,33 @@ object ObjectiveStatusTool : Tool, KoinComponent {
                 "error" to "Unknown status '$status'. Use running, done, or failed.",
             )
         }
-        val summary = args["summary"]?.toString() ?: ""
+        val summary = (args["summary"] as? String)?.trim()?.take(2_000)
+            ?.takeIf { it.isNotBlank() } ?: return mapOf("success" to false, "error" to "summary is required")
 
         val conversationId = currentConversationIdOrNull()
             ?: return mapOf("success" to false, "error" to "No objective conversation is bound to this run")
 
-        val existing = objectiveStore.get(conversationId)
-            ?: return mapOf("success" to false, "error" to "This conversation has no objective set")
-
-        objectiveStore.upsert(conversationId, existing.copy(status = status, summary = summary))
+        val run = currentObjectiveRun()
+        var accepted = false
+        objectiveStore.update(conversationId) { existing ->
+            if (existing == null || existing.status !in ObjectiveStatus.ACTIVE ||
+                (run != null && run.startedAtMs != existing.lastRunAtMs)
+            ) {
+                existing
+            } else {
+                accepted = true
+                fun field(name: String, fallback: String) = (args[name] as? String)?.trim()?.take(2_000) ?: fallback
+                existing.copy(
+                    status = status,
+                    summary = summary,
+                    completedSteps = field("completed_steps", existing.completedSteps),
+                    currentBlocker = field("current_blocker", if (status == ObjectiveStatus.FAILED) summary else ""),
+                    nextAction = field("next_action", if (status == ObjectiveStatus.DONE) "" else existing.nextAction),
+                    keyFindings = field("key_findings", existing.keyFindings),
+                )
+            }
+        }
+        if (!accepted) return mapOf("success" to false, "error" to "No running objective is bound to this run")
 
         return mapOf(
             "success" to true,

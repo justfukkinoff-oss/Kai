@@ -9,3 +9,9 @@ class ConversationIdElement(val conversationId: String) : AbstractCoroutineConte
 }
 
 suspend fun currentConversationIdOrNull(): String? = coroutineContext[ConversationIdElement]?.conversationId
+
+internal class ObjectiveRunElement(val startedAtMs: Long, val providerSessionId: String) : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<ObjectiveRunElement>
+}
+
+internal suspend fun currentObjectiveRun(): ObjectiveRunElement? = coroutineContext[ObjectiveRunElement]

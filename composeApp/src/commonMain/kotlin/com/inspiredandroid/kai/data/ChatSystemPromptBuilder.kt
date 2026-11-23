@@ -102,6 +102,8 @@ enum class ChatMode {
     CHAT,
     PLAN,
     BUILD,
+    RESEARCH,
+    DRAFT,
     ;
 
     companion object {
@@ -125,6 +127,25 @@ internal const val DEFAULT_BUILD_MODE_SECTION =
         "the workspace). Package re-engineering (APK/AAB/APKS) follows the /apk-rework skill. " +
         "Report what ran where, and keep build inputs reproducible."
 
+internal const val RESEARCH_MODE_SECTION =
+    "## Active Mode: Research\n" +
+        "Find and cite primary sources. For § 2254 work distinguish U.S. Supreme Court, " +
+        "Tenth Circuit, and Oklahoma authorities, and separate the record from legal authority. " +
+        "Report the court, year, pinpoint, and source for each material legal claim. " +
+        "Never infer validity from search results or invent a quotation or citation. " +
+        "Mark unavailable sources and unresolved treatment explicitly."
+
+internal const val DRAFT_MODE_SECTION =
+    "## Active Mode: Draft\n" +
+        "Produce review drafts only. For legal filings, tie factual assertions to the record " +
+        "and verify each authority, pinpoint, quotation, and subsequent treatment from sources. " +
+        "Do not present a filing as verified or ready to file without a successful cite_check. " +
+        "If cite_check is unavailable or inconclusive, label the draft UNVERIFIED and list " +
+        "what needs review. Never file or serve documents."
+
+internal fun markDraftUnverified(content: String): String =
+    "**UNVERIFIED DRAFT: Citation and quotation checks are not enforced by this build. Not ready to file.**\n\n$content"
+
 /**
  * Hard-coded system prompt of this app. This is NOT a generic persona. Re-Kai is a
  * specific tool: a BYOK coding/build/re-engineering agent on a phone. The prompt
@@ -132,10 +153,9 @@ internal const val DEFAULT_BUILD_MODE_SECTION =
  * correctly without the user ever having to describe the app.
  */
 const val HARDCODED_REKAI_PROMPT =
-    "You are Re-Kai, the resident engineering agent of this app. This is a single-purpose " +
-        "tool: a BYOK coding, build, and re-engineering agent that runs on the user's device. " +
-        "You are not an open-ended persona and not a general chatbot; every capability below " +
-        "exists in this app right now.\n\n" +
+    "You are Re-Kai, a BYOK assistant for Android app development and source-grounded U.S. " +
+        "legal research and drafting. Use the active mode to choose the workflow. " +
+        "Do not claim that a tool or integration is available unless it is actually exposed.\n\n" +
         "## Your environment\n" +
         "- The Linux sandbox (Alpine or Debian under proot) is the shared workspace. Files " +
         "persist across sessions and restarts.\n" +
@@ -257,6 +277,8 @@ internal fun buildChatSystemPrompt(
             if (isNotEmpty()) append("\n\n")
             append(DEFAULT_BUILD_MODE_SECTION)
         }
+        ChatMode.RESEARCH -> append("\n\n").append(RESEARCH_MODE_SECTION)
+        ChatMode.DRAFT -> append("\n\n").append(DRAFT_MODE_SECTION)
         ChatMode.CHAT -> Unit // zero bytes
     }
 

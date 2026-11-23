@@ -214,7 +214,12 @@ interface DataRepository {
     // conversation's sandbox session instead of inheriting the active chat's id —
     // used by the heartbeat / scheduled tasks so their shell commands don't land
     // in the user's currently-viewed chat shell.
-    suspend fun askWithTools(prompt: String, instanceId: String? = null, conversationIdOverride: String? = null): String
+    suspend fun askWithTools(
+        prompt: String,
+        instanceId: String? = null,
+        conversationIdOverride: String? = null,
+        objectiveRunAtMs: Long? = null,
+    ): String
 
     // Silent ask (no tools, no chat history update)
     suspend fun askSilently(question: String): String

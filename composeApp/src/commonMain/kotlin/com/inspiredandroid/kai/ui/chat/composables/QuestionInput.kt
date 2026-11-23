@@ -77,7 +77,9 @@ import kai.composeapp.generated.resources.ic_file
 import kai.composeapp.generated.resources.ic_image
 import kai.composeapp.generated.resources.chat_mode_build
 import kai.composeapp.generated.resources.chat_mode_chat
+import kai.composeapp.generated.resources.chat_mode_draft
 import kai.composeapp.generated.resources.chat_mode_plan
+import kai.composeapp.generated.resources.chat_mode_research
 import kai.composeapp.generated.resources.chat_objective_mode
 import kai.composeapp.generated.resources.ic_stop
 import kai.composeapp.generated.resources.ic_up
@@ -129,6 +131,8 @@ fun QuestionInput(
                                         ChatMode.CHAT -> Res.string.chat_mode_chat
                                         ChatMode.PLAN -> Res.string.chat_mode_plan
                                         ChatMode.BUILD -> Res.string.chat_mode_build
+                                        ChatMode.RESEARCH -> Res.string.chat_mode_research
+                                        ChatMode.DRAFT -> Res.string.chat_mode_draft
                                     },
                                 ),
                             )

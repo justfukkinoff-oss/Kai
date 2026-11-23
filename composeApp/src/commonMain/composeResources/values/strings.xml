@@ -537,6 +537,8 @@
     <string name="chat_mode_chat">Chat</string>
     <string name="chat_mode_plan">Plan</string>
     <string name="chat_mode_build">Build</string>
+    <string name="chat_mode_research">Research</string>
+    <string name="chat_mode_draft">Draft</string>
     <string name="chat_objective_mode">Objective mode</string>
     <string name="chat_objective_set">Set Objective</string>
     <string name="chat_objective_hint">Describe the final goal. Agents keep working toward it and report progress automatically.</string>

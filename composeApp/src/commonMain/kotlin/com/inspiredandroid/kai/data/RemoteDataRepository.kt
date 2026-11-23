@@ -192,6 +192,7 @@ class RemoteDataRepository(
     private val mcpServerManager: McpServerManager,
     private val skillManager: SkillManager,
     private val sandboxController: SandboxController,
+    private val objectiveStore: ObjectiveStore,
     private val localInferenceEngine: LocalInferenceEngine? = null,
 ) : DataRepository {
 
@@ -540,8 +541,12 @@ class RemoteDataRepository(
         // prompt shape). We hand whichever one through to the engine unchanged.
         // Native litert-lm `automaticToolCalling` owns the tool loop — our allowlisted
         // tools are passed once via [localToolDescriptionJson] and the engine drives them.
+        val objectiveRecovery = currentObjectiveRun() != null
         val localTools: List<LocalTool> = if (localModelDeclaresTools(model.id)) {
-            getLocalSafeTools().map { tool ->
+            getAvailableTools().filter {
+                it.schema.name in LOCAL_TOOL_ALLOWLIST ||
+                    (objectiveRecovery && it.schema.name == "objective_set_status")
+            }.map { tool ->
                 LocalTool(
                     name = tool.schema.name,
                     descriptionJsonString = localToolDescriptionJson(tool),
@@ -550,6 +555,9 @@ class RemoteDataRepository(
             }
         } else {
             emptyList()
+        }
+        check(!objectiveRecovery || localTools.any { it.name == "objective_set_status" }) {
+            "The Objective model does not have the checkpoint tool"
         }
 
         val inferenceMessages = messages.mapNotNull { msg ->
@@ -563,7 +571,7 @@ class RemoteDataRepository(
         return try {
             engine.chat(messages = inferenceMessages, systemPrompt = systemPrompt, tools = localTools)
         } catch (e: RuntimeException) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
+            if (e is kotlinx.coroutines.CancellationException || objectiveRecovery) throw e
             // litert-lm's strict ANTLR function-call parser sometimes rejects malformed
             // tool-call output from small Gemma models, throwing INVALID_ARGUMENT from JNI.
             // Retry once without tools so the user gets *some* answer rather than a hard
@@ -705,12 +713,15 @@ class RemoteDataRepository(
             // Re-fetch the system prompt with the CHAT_LOCAL variant — the caller
             // (`ask()`/`askWithTools()`) pre-fetched a CHAT_REMOTE prompt, but on-device
             // needs the trimmed variant.
-            val localPrompt = getActiveSystemPrompt(SystemPromptVariant.CHAT_LOCAL)
+            val localPrompt = if (currentObjectiveRun() != null) systemPrompt else getActiveSystemPrompt(SystemPromptVariant.CHAT_LOCAL)
             return AssistantTurn(askWithLocalEngine(messages, localPrompt, instanceId, history))
         }
 
         val creds = instanceCredentials(instanceId, service)
         val tools = if (supportsTools(creds.modelId)) getAvailableTools() else emptyList()
+        check(currentObjectiveRun() == null || tools.any { it.schema.name == "objective_set_status" }) {
+            "The Objective model does not have the checkpoint tool"
+        }
 
         if (tools.isEmpty()) {
             return plainChat(service, creds, messages, systemPrompt, strictEmptyResponse = true)
@@ -730,6 +741,8 @@ class RemoteDataRepository(
      * conversation exists. Used as the upstream session id for providers that require one.
      */
     private suspend fun activeConversationId(): String? = currentConversationIdOrNull() ?: _currentConversationId.value
+
+    private suspend fun providerSessionId(): String? = currentObjectiveRun()?.providerSessionId ?: activeConversationId()
 
     /**
      * One assistant turn with no tools declared, dispatched to whichever API [service] speaks.
@@ -791,7 +804,7 @@ class RemoteDataRepository(
                     if (content == null && strictEmptyResponse) throw OpenAICompatibleEmptyResponseException()
                     return AssistantTurn(content.orEmpty(), response.reasoningSummary)
                 }
-                val sessionId = activeConversationId()
+                val sessionId = providerSessionId()
                 val response = call {
                     requests.openAICompatibleChat(service, credentials, openAIMessages, sessionId = sessionId, requestTimeoutMs = requestTimeoutMs).getOrThrow()
                 }
@@ -968,6 +981,7 @@ class RemoteDataRepository(
         compactHistoryIfNeeded()
 
         val messages = chatHistory.value
+        val draftMode = getChatMode() == ChatMode.DRAFT
         val systemPrompt = getActiveSystemPrompt()
 
         val fallbackEntries = getOrderedFallbackEntries().filter { hasValidInstanceApiKey(it.instanceId, it.service) }
@@ -1020,7 +1034,7 @@ class RemoteDataRepository(
                         add(
                             History(
                                 role = History.Role.ASSISTANT,
-                                content = turn.content,
+                                content = if (draftMode) markDraftUnverified(turn.content) else turn.content,
                                 reasoningContent = turn.reasoningContent,
                                 fallbackServiceName = fallbackServiceName,
                             ),
@@ -1078,7 +1092,7 @@ class RemoteDataRepository(
                         toolCalls = calls,
                     )
                 }
-                val sessionId = activeConversationId()
+                val sessionId = providerSessionId()
                 val response = retryApiCall {
                     requests.openAICompatibleChat(service, credentials, msgs, tools, sessionId = sessionId).getOrThrow()
                 }
@@ -1316,7 +1330,7 @@ class RemoteDataRepository(
             response.throwIfFailed(service)
             return response.outputText.orEmpty()
         }
-        val sessionId = activeConversationId()
+        val sessionId = providerSessionId()
         val response = retryApiCall {
             requests.openAICompatibleChat(service, credentials, bailoutMessages, sessionId = sessionId).getOrThrow()
         }
@@ -1990,8 +2004,6 @@ class RemoteDataRepository(
 
     // --- Objective mode ---
 
-    private val objectiveStore = ObjectiveStore(appSettings)
-
     private var objectiveModeFlag = appSettings.getCurrentObjectiveMode()
 
     override fun isObjectiveModeActive(): Boolean = objectiveModeFlag
@@ -2010,20 +2022,12 @@ class RemoteDataRepository(
         objectiveModeFlag = goal.isNotBlank()
         appSettings.setCurrentObjectiveMode(objectiveModeFlag)
         appSettings.setCurrentObjectiveGoal(goal)
-        if (goal.isBlank()) {
-            objectiveStore.remove(conversationId)
-        } else {
-            val existing = objectiveStore.get(conversationId)
-            objectiveStore.upsert(
-                conversationId,
-                ObjectiveState(
-                    goal = goal,
-                    status = existing?.status ?: ObjectiveStatus.RUNNING,
-                    summary = existing?.summary ?: "",
-                    lastRunAtMs = existing?.lastRunAtMs ?: 0L,
-                    attempts = existing?.attempts ?: 0,
-                ),
-            )
+        objectiveStore.update(conversationId) { existing ->
+            when {
+                goal.isBlank() -> null
+                goal == existing?.goal -> existing
+                else -> ObjectiveState(goal = goal)
+            }
         }
         val snapshot = savedConversations.value
         val existingConversation = snapshot.find { it.id == conversationId }
@@ -2060,8 +2064,8 @@ class RemoteDataRepository(
 
     override suspend fun setObjectiveStatus(status: String) {
         val conversationId = _currentConversationId.value ?: return
-        objectiveStore.get(conversationId)?.let {
-            objectiveStore.upsert(conversationId, it.copy(status = status))
+        objectiveStore.update(conversationId) {
+            it?.copy(status = status)
         }
     }
 
@@ -2285,19 +2289,38 @@ class RemoteDataRepository(
         return appSettings.importFromJson(jsonObject, toolIds, sections, replace)
     }
 
-    override suspend fun askWithTools(prompt: String, instanceId: String?, conversationIdOverride: String?): String {
+    override suspend fun askWithTools(
+        prompt: String,
+        instanceId: String?,
+        conversationIdOverride: String?,
+        objectiveRunAtMs: Long?,
+    ): String {
         // Selection: explicit instance > first remote > first on-device. The simple-tool
         // allowlist works at any context size, so on-device is always eligible for fallback.
         val instances = getConfiguredServiceInstances()
         val targetInstance = instanceId?.let { id -> instances.find { it.instanceId == id } }
+            ?: if (objectiveRunAtMs != null && instanceId != null) {
+                error("The configured Objective model is no longer available")
+            } else {
+                null
+            }
+        val selectedInstance = targetInstance
             ?: instances.firstOrNull { !Service.fromId(it.serviceId).isOnDevice }
             ?: instances.firstOrNull { Service.fromId(it.serviceId).isOnDevice }
-            ?: return ""
-        val service = Service.fromId(targetInstance.serviceId)
+            ?: if (objectiveRunAtMs != null) error("Configure a model for Objective recovery") else return ""
+        val service = Service.fromId(selectedInstance.serviceId)
         val messages = listOf(History(role = History.Role.USER, content = prompt))
+        val localHistory = MutableStateFlow(messages)
+        if (objectiveRunAtMs != null) {
+            val id = requireNotNull(conversationIdOverride) { "Objective recovery needs a bound conversation" }
+            val state = objectiveStore.get(id)
+            if (state?.lastRunAtMs != objectiveRunAtMs || state.status !in ObjectiveStatus.ACTIVE) return ""
+            return withContext(ConversationIdElement(id) + ObjectiveRunElement(objectiveRunAtMs, Uuid.random().toString())) {
+                askWithService(service, messages, OBJECTIVE_RECOVERY_SYSTEM_PROMPT, selectedInstance.instanceId, localHistory).content
+            }
+        }
         val systemPrompt = getActiveSystemPrompt()
         // Use a local history to avoid polluting the current conversation's chatHistory
-        val localHistory = MutableStateFlow(messages)
         // When a conversation override is set (heartbeat / scheduled tasks), bind any
         // tool calls in this run to that conversation's sandbox session via the
         // coroutine context — otherwise tool dispatch would inherit `_currentConversationId`
@@ -2305,10 +2328,10 @@ class RemoteDataRepository(
         // that chat's persistent bash session.
         return if (conversationIdOverride != null) {
             withContext(ConversationIdElement(conversationIdOverride)) {
-                askWithService(service, messages, systemPrompt, targetInstance.instanceId, localHistory).content
+                askWithService(service, messages, systemPrompt, selectedInstance.instanceId, localHistory).content
             }
         } else {
-            askWithService(service, messages, systemPrompt, targetInstance.instanceId, localHistory).content
+            askWithService(service, messages, systemPrompt, selectedInstance.instanceId, localHistory).content
         }
     }
 

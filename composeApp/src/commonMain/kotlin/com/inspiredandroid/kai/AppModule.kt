@@ -134,13 +134,14 @@ val appModule = module {
             mcpServerManager = get(),
             skillManager = get(),
             sandboxController = get(),
+            objectiveStore = get(),
             localInferenceEngine = createLocalInferenceEngine(),
         )
     }
     single<DataRepository> { get<RemoteDataRepository>() }
     single<ObjectiveStore> { ObjectiveStore(get()) }
     single<ObjectiveManager> {
-        ObjectiveManager(get<DataRepository>(), get<ObjectiveStore>(), get<AppSettings>())
+        ObjectiveManager(get<DataRepository>(), get<ObjectiveStore>(), get<AppSettings>(), get<HeartbeatManager>())
     }
     single<SplinterlandsBattleRunner> {
         SplinterlandsBattleRunner(get(), get(), get<DataRepository>(), get<DaemonController>())
