@@ -21,6 +21,11 @@ OPINION_PATH = re.compile(r"/api/rest/v4/opinions/([0-9]+)/")
 PUBLIC_CITATION = re.compile(r"\d{1,8} [A-Za-z0-9. ]{1,30} \d{1,9}")
 QUOTES = re.compile(r'“([^”\n]+)”|"([^"\n]+)"|((?:^>[^\n]+(?:\n|$))+)', re.MULTILINE)
 TREATMENT = "subsequent treatment not verified"
+TREATMENT_SIGNAL = re.compile(
+    r"\b(?:overrul(?:e|ed|ing)|abrogat(?:e|ed|ing)|supersed(?:e|ed|ing)|"
+    r"disapprov(?:e|ed|ing)|limited|no longer (?:controlling|good law))\b",
+    re.IGNORECASE,
+)
 
 
 class ReviewError(Exception):
@@ -94,14 +99,14 @@ class CourtListener:
                 "opinions": cluster.get("sub_opinions") or [], "reason": None}
 
     def opinion(self, url):
-        uri = urlsplit(url)
-        match = OPINION_PATH.fullmatch(uri.path)
-        if not match or (uri.netloc and (uri.scheme != "https" or uri.netloc != "www.courtlistener.com")):
+        opinion_id = self.opinion_id(url)
+        if opinion_id is None:
             return None
-        saved = self.library / "opinions" / (match[1] + ".json")
+        path = f"/api/rest/v4/opinions/{opinion_id}/"
+        saved = self.library / "opinions" / (opinion_id + ".json")
         opinion = self.read_cache(saved)
         if opinion is None:
-            opinion = self.request(uri.path)
+            opinion = self.request(path)
             html = opinion.get("html_with_citations")
             if html:
                 parser = OpinionText()
@@ -111,9 +116,48 @@ class CourtListener:
                 full_text = opinion.get("plain_text", "")
             if not full_text.strip():
                 return None
-            opinion = {"text": full_text, "type": opinion.get("type"), "source": HOST + uri.path}
+            cluster = urlsplit(opinion.get("cluster") or "")
+            cluster_match = re.fullmatch(r"/api/rest/v4/clusters/([0-9]+)/", cluster.path)
+            opinion = {"text": full_text, "type": opinion.get("type"), "source": HOST + path,
+                       "link": f"{HOST}/opinion/{cluster_match[1]}/" if cluster_match else None}
             self.write_cache(saved, opinion)
         return opinion
+
+    @staticmethod
+    def opinion_id(url):
+        if isinstance(url, int) and url > 0:
+            return str(url)
+        if not isinstance(url, str):
+            return None
+        uri = urlsplit(url)
+        match = OPINION_PATH.fullmatch(uri.path)
+        if match and (not uri.netloc or (uri.scheme == "https" and uri.netloc == "www.courtlistener.com")):
+            return match[1]
+        return None
+
+    def treatment_leads(self, citation, match):
+        """Return review leads, not a citator classification or a finding of good law."""
+        cite_text = re.compile(r"\b" + r"\s+".join(map(re.escape, citation.split())) + r"\b", re.I)
+        inspected, leads, seen = 0, [], set()
+        for uri in match["opinions"][:2]:
+            opinion_id = self.opinion_id(uri)
+            if opinion_id is None:
+                continue
+            graph = self.request(f"/api/rest/v4/opinions-cited/?cited_opinion={opinion_id}")
+            for row in graph.get("results", [])[:5]:
+                citing_id = self.opinion_id(row.get("citing_opinion"))
+                if not citing_id or citing_id in seen:
+                    continue
+                seen.add(citing_id)
+                opinion = self.opinion(citing_id)
+                if not opinion:
+                    continue
+                inspected += 1
+                text = normalized(opinion["text"])
+                if any(TREATMENT_SIGNAL.search(text[max(0, cite.start() - 145):cite.end() + 75])
+                       for cite in cite_text.finditer(text)):
+                    leads.append((citing_id, opinion.get("link")))
+        return inspected, leads
 
     @staticmethod
     def read_cache(file):
@@ -134,7 +178,10 @@ class CourtListener:
             pass  # A read-only library must not turn a successful lookup into a failure.
         finally:
             if "tmp_name" in locals():
-                Path(tmp_name).unlink(missing_ok=True)
+                try:
+                    Path(tmp_name).unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 def parse_citations(text):
@@ -254,6 +301,7 @@ def review(text, client, parse=parse_citations):
         cite = next(iter(relevant))
         opinions = matches.get(cite, {}).get("opinions", [])
         best = "not_found"
+        quote_label = f"Quote {number}"
         for uri in opinions:
             try:
                 opinion = client.opinion(uri)
@@ -264,15 +312,35 @@ def review(text, client, parse=parse_citations):
             result = quote_match(quote, opinion["text"])
             if result == "exact_text":
                 best = "exact_text"
+                sources[quote_label] = matches[cite].get("url")
                 break
             if result == "similar_only":
                 best = result
+                sources[quote_label] = matches[cite].get("url")
         if best == "exact_text":
             issues.append(f"Quote {number}: text matched {cite}; pinpoint and opinion role not verified.")
         elif best == "similar_only":
             issues.append(f"Quote {number}: similar wording found in {cite}; exact quote not verified.")
         else:
             issues.append(f"Quote {number}: not verified against {cite}.")
+
+    verified = [(cite, match) for cite, match in matches.items() if not match["reason"]]
+    if verified:
+        with ThreadPoolExecutor(max_workers=min(4, len(verified))) as pool:
+            pending = [(cite, pool.submit(client.treatment_leads, cite, match)) for cite, match in verified]
+            for cite, future in pending:
+                try:
+                    count, leads = future.result()
+                except ReviewError:
+                    continue
+                if count:
+                    prior = f"{cite}: {TREATMENT}."
+                    if prior in issues:
+                        issues[issues.index(prior)] = f"{cite}: {TREATMENT}; scanned {count} later opinion(s)."
+                for opinion_id, url in leads:
+                    label = f"{cite} (citing opinion {opinion_id})"
+                    sources[label] = url
+                    issues.insert(0, f"{label}: possible negative-treatment language near the citation; review the opinion.")
 
     return {"issues": list(dict.fromkeys(issues)), "sources": sources, "citations": len(citations)}
 
