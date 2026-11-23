@@ -137,7 +137,7 @@ internal const val RESEARCH_MODE_SECTION =
 
 internal const val DRAFT_MODE_SECTION =
     "## Active Mode: Draft\n" +
-        "Produce review drafts only. For legal filings, tie factual assertions to the record " +
+        "For legal filings, tie factual assertions to the record " +
         "and verify each authority, pinpoint, quotation, and subsequent treatment from sources. " +
         "Kai runs cite_check after producing the reply and reports unresolved items separately. " +
         "Do not run a redundant check on the same text unless the user asks. Do not claim " +

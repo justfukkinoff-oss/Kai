@@ -592,6 +592,9 @@ class ChatViewModel(
 
     private fun setObjective(goal: String) {
         viewModelScope.launch {
+            if (goal.isBlank()) {
+                dataRepository.currentConversationId.value?.let { objectiveManager?.cancel(it) }
+            }
             dataRepository.setObjective(goal)
             _state.update {
                 it.copy(objectiveMode = goal.isNotBlank(), objectiveArmed = false, activeObjective = dataRepository.getActiveObjective())

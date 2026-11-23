@@ -2437,7 +2437,7 @@ class RemoteDataRepository(
         content: String,
         reasoningContent: String?,
         toolActivity: List<String>,
-    ) = conversationWriteMutex.withLock {
+    ): Unit = conversationWriteMutex.withLock {
         val now = Clock.System.now().toEpochMilliseconds()
 
         val existing = savedConversations.value.find { it.id == conversationId } ?: return

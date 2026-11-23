@@ -120,6 +120,7 @@ import kai.composeapp.generated.resources.interactive_ui_parsing_failed
 import kai.composeapp.generated.resources.interactive_welcome_subtitle
 import kai.composeapp.generated.resources.interactive_welcome_title
 import kai.composeapp.generated.resources.scroll_to_bottom_content_description
+import kai.composeapp.generated.resources.tool_returned
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
