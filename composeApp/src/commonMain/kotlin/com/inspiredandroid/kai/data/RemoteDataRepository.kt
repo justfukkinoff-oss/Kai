@@ -5,6 +5,7 @@ package com.inspiredandroid.kai.data
 import com.inspiredandroid.kai.SandboxController
 import com.inspiredandroid.kai.compressImageBytes
 import com.inspiredandroid.kai.currentPlatform
+import com.inspiredandroid.kai.getBackgroundDispatcher
 import com.inspiredandroid.kai.data.providers.buildAnthropicMessages
 import com.inspiredandroid.kai.data.providers.buildOpenAIMessages
 import com.inspiredandroid.kai.data.providers.toResponsesInput
@@ -74,6 +75,8 @@ import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -182,6 +185,8 @@ class RemoteDataRepository(
 ) : DataRepository {
 
     private val prettyJson = Json { prettyPrint = true }
+    private val continuity = ConversationContinuity(appSettings)
+    private val backgroundScope = CoroutineScope(SupervisorJob() + getBackgroundDispatcher())
 
     /**
      * Whether the on-device model file for [modelId] carries a tool section in its chat
@@ -644,7 +649,7 @@ class RemoteDataRepository(
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 toolErrorJson(e.message ?: "Tool execution failed")
             }
-            recordToolMemory(conversationIdForTool, name, result)
+            recordToolMemory(conversationIdForTool, callId, name, result)
             val elapsed = Clock.System.now().toEpochMilliseconds() - startTime
             if (elapsed < MIN_TOOL_DISPLAY_MS) {
                 delay(MIN_TOOL_DISPLAY_MS.milliseconds - elapsed.milliseconds)
@@ -687,7 +692,9 @@ class RemoteDataRepository(
             // Re-fetch the system prompt with the CHAT_LOCAL variant — the caller
             // (`ask()`/`askWithTools()`) pre-fetched a CHAT_REMOTE prompt, but on-device
             // needs the trimmed variant.
-            val localPrompt = if (currentObjectiveRun() != null) systemPrompt else getActiveSystemPrompt(SystemPromptVariant.CHAT_LOCAL)
+            val localPrompt = if (currentObjectiveRun() != null) systemPrompt else {
+                withContinuity(getActiveSystemPrompt(SystemPromptVariant.CHAT_LOCAL), messages)
+            }
             return AssistantTurn(askWithLocalEngine(messages, localPrompt, instanceId, history))
         }
 
@@ -968,27 +975,33 @@ class RemoteDataRepository(
             saveCurrentConversation()
         }
 
-        compactHistoryIfNeeded()
-
-        val messages = chatHistory.value
+        val historySnapshot = chatHistory.value
         val draftMode = getChatMode() == ChatMode.DRAFT
-        val systemPrompt = getActiveSystemPrompt()
+        val baseSystemPrompt = getActiveSystemPrompt()
 
         val fallbackEntries = getOrderedFallbackEntries().filter { hasValidInstanceApiKey(it.instanceId, it.service) }
-
-        val historyChars = messages.sumOf { it.content.length } + (systemPrompt?.length ?: 0)
 
         var lastException: Exception? = null
         var fallbackServiceName: String? = null
 
         try {
             for ((index, entry) in fallbackEntries.withIndex()) {
+                val modelId = instanceCredentials(entry.instanceId, entry.service).modelId
+                val contextWindow = ModelCatalog.estimateContextWindow(modelId)
+                val reserve = (baseSystemPrompt?.length ?: 0) + 6_000
+                val messages = if (entry.service.isOnDevice) {
+                    trimToRecentExchanges(historySnapshot, 8)
+                } else {
+                    trimHistoryForContext(historySnapshot, reserve, contextWindow).ifEmpty {
+                        trimToRecentExchanges(historySnapshot, 1)
+                    }
+                }
+                val systemPrompt = withContinuity(baseSystemPrompt, messages)
                 // Skip fallback services whose context window is too small for the current history
                 // On-device models handle their own context limits, so skip this check for them
                 if (!entry.service.isOnDevice) {
-                    val creds = instanceCredentials(entry.instanceId, entry.service)
-                    val entryWindowChars = ModelCatalog.estimateContextWindow(creds.modelId) * ESTIMATED_CHARS_PER_TOKEN
-                    if (historyChars > entryWindowChars) {
+                    val entryWindowChars = contextWindow * ESTIMATED_CHARS_PER_TOKEN
+                    if (messages.sumOf { it.content.length } + (systemPrompt?.length ?: 0) > entryWindowChars) {
                         lastException = ContextWindowExceededException()
                         _fallbackStatus.value = FallbackStatus(
                             serviceName = entry.service.displayName,
@@ -1034,8 +1047,12 @@ class RemoteDataRepository(
                 saveCurrentConversation()
                 if (draftMode && turn.content.isNotBlank()) {
                     val draftConversation = _currentConversationId.value
-                    val review = CitationCheckTool.review(turn.content, sandboxController)
-                    if (draftConversation != null) addAssistantMessageTo(draftConversation, review.message())
+                    if (draftConversation != null) backgroundScope.launch {
+                        val review = CitationCheckTool.review(turn.content, sandboxController)
+                        if (savedConversations.value.any { it.id == draftConversation }) {
+                            addAssistantMessageTo(draftConversation, review.message())
+                        }
+                    }
                 }
                 return
             }
@@ -1370,7 +1387,7 @@ class RemoteDataRepository(
                 toolCalls.map { (callId, name, arguments) ->
                     async {
                         val result = toolExecutor.executeTool(name, arguments, conversationIdSnapshot)
-                        recordToolMemory(conversationIdSnapshot, name, result)
+                        recordToolMemory(conversationIdSnapshot, callId, name, result)
                         Triple(callId, name, result)
                     }
                 }.awaitAll()
@@ -1608,6 +1625,11 @@ class RemoteDataRepository(
         return history.subList(cutoffIndex, history.size)
     }
 
+    private suspend fun withContinuity(systemPrompt: String?, messages: List<History>): String? {
+        val id = activeConversationId() ?: return systemPrompt
+        return (systemPrompt.orEmpty() + continuity.context(id, messages)).ifEmpty { null }
+    }
+
     private suspend fun saveCurrentConversation() {
         val history = trimToRecentExchanges(chatHistory.value, 20)
         if (history.isEmpty()) return
@@ -1616,6 +1638,14 @@ class RemoteDataRepository(
         val conversationId = _currentConversationId.value ?: Uuid.random().toString().also {
             setCurrentConversationId(it)
         }
+        continuity.write(conversationId, history.mapNotNull { item ->
+            val source = when {
+                item.role == History.Role.USER -> "User"
+                item.role == History.Role.ASSISTANT && !item.isThinking && item.toolCalls == null -> "Assistant"
+                else -> return@mapNotNull null
+            }
+            if (item.content.isBlank()) null else ContinuityEntry(item.id, source, continuityExcerpt(item.content))
+        })
 
         val existingConversation = savedConversations.value.find { it.id == conversationId }
 
@@ -1741,6 +1771,8 @@ class RemoteDataRepository(
             chatHistory.value = emptyList()
         }
         conversationStorage.deleteConversation(id)
+        objectiveStore.update(id) { null }
+        continuity.delete(id)
         // Drop the per-conversation shell session so a future conversation reusing
         // this id (very unlikely — random uuids) doesn't inherit stale state, and
         // memory is freed.
@@ -2488,9 +2520,10 @@ class RemoteDataRepository(
         }
     }
 
-    private suspend fun recordToolMemory(conversationId: String?, name: String, result: String) {
+    private suspend fun recordToolMemory(conversationId: String?, callId: String, name: String, result: String) {
         if (conversationId == null) return
         val run = currentObjectiveRun()
+        continuity.write(conversationId, listOf(ContinuityEntry(callId, "Tool $name", continuityExcerpt(result))))
         objectiveStore.update(conversationId) {
             if (it != null && (run == null || it.lastRunAtMs == run.startedAtMs)) it.recordActivity("$name: $result") else it
         }

@@ -265,6 +265,12 @@ class AppSettings(internal val settings: Settings) {
     // Agent memories
     fun getMemoriesJson(): String = settings.getString(KEY_AGENT_MEMORIES, "[]")
 
+    internal fun getContinuityJson(id: String): String = settings.getString("continuity.$id", "[]")
+
+    internal fun setContinuityJson(id: String, value: String?) {
+        if (value == null) settings.remove("continuity.$id") else settings.putString("continuity.$id", value)
+    }
+
     /**
      * Keeps a persisted JSON blob that no longer decodes (e.g. after a schema change without a
      * migration) under its own key, so the store's next write can't destroy the only copy.
