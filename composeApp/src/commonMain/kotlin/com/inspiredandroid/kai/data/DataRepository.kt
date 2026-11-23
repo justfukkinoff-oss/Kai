@@ -232,7 +232,7 @@ interface DataRepository {
      * touching the active chat. Used by the Objective manager to land continuation
      * reports in the objective conversation they belong to.
      */
-    suspend fun addAssistantMessageTo(conversationId: String, content: String)
+    suspend fun addAssistantMessageTo(conversationId: String, content: String, reasoningContent: String? = null)
 
     /**
      * Resolve the persistent heartbeat conversation's id, creating an empty

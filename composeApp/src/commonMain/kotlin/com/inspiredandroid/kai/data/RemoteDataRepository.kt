@@ -75,6 +75,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -110,23 +111,6 @@ private const val BINARY_UPLOAD_DIR = "/root/chat-uploads/"
 private const val ESTIMATED_CHARS_PER_TOKEN = 4
 private const val COMPACTION_THRESHOLD = 0.7 // Compact when history exceeds 70% of context window
 private const val COMPACTION_KEEP_RECENT = 4 // Number of recent user exchanges to keep verbatim
-
-// Explicit allowlist of tools exposed to the on-device (LiteRT) model. We use a
-// hardcoded name list rather than a structural filter because small Gemma models hit
-// litert-lm's strict ANTLR function-call parser hard on anything more complex than
-// a couple of string parameters. Excluded by design: memory_learn (4 params + enum),
-// schedule_task / list_tasks / cancel_task (datetime + cron), the entire email family,
-// the heartbeat config tools, and MCP tools.
-internal val LOCAL_TOOL_ALLOWLIST = setOf(
-    "get_local_time",
-    "get_location_from_ip",
-    "web_search",
-    "open_url",
-    "memory_store",
-    "memory_forget",
-    "memory_reinforce",
-    "execute_shell_command",
-)
 
 /**
  * The Responses API reports a failed turn inside a 200 body (`status: "failed"`), which would
@@ -198,15 +182,6 @@ class RemoteDataRepository(
 ) : DataRepository {
 
     private val prettyJson = Json { prettyPrint = true }
-
-    /**
-     * Returns the tools exposed to the on-device (LiteRT) model. Filtered by name against
-     * [LOCAL_TOOL_ALLOWLIST]. Tools the user has disabled in settings (e.g. shell command,
-     * which is gated behind `isToolEnabled("execute_shell_command")`) won't appear in
-     * `getAvailableTools()` in the first place, so they're naturally excluded.
-     */
-    private fun getLocalSafeTools(): List<Tool> = getAvailableTools()
-        .filter { it.schema.name in LOCAL_TOOL_ALLOWLIST }
 
     /**
      * Whether the on-device model file for [modelId] carries a tool section in its chat
@@ -544,10 +519,7 @@ class RemoteDataRepository(
         // tools are passed once via [localToolDescriptionJson] and the engine drives them.
         val objectiveRecovery = currentObjectiveRun() != null
         val localTools: List<LocalTool> = if (localModelDeclaresTools(model.id)) {
-            getAvailableTools().filter {
-                it.schema.name in LOCAL_TOOL_ALLOWLIST ||
-                    (objectiveRecovery && it.schema.name == "objective_set_status")
-            }.map { tool ->
+            getAvailableTools().map { tool ->
                 LocalTool(
                     name = tool.schema.name,
                     descriptionJsonString = localToolDescriptionJson(tool),
@@ -672,6 +644,7 @@ class RemoteDataRepository(
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 toolErrorJson(e.message ?: "Tool execution failed")
             }
+            recordToolMemory(conversationIdForTool, name, result)
             val elapsed = Clock.System.now().toEpochMilliseconds() - startTime
             if (elapsed < MIN_TOOL_DISPLAY_MS) {
                 delay(MIN_TOOL_DISPLAY_MS.milliseconds - elapsed.milliseconds)
@@ -977,6 +950,22 @@ class RemoteDataRepository(
                     )
                 }
             }
+            val objectiveId = _currentConversationId.value
+            if (objectiveId != null && objectiveModeFlag) {
+                objectiveStore.update(objectiveId) { existing ->
+                    if (existing == null) null
+                    else {
+                        val extra = listOfNotNull(
+                            question?.takeIf { it != existing.goal && it.isNotBlank() },
+                            notes.takeIf { it.isNotBlank() },
+                        ).joinToString("\n")
+                        if (extra.isBlank()) existing else existing.copy(
+                            userDetails = listOf(existing.userDetails, extra).filter { it.isNotBlank() }.joinToString("\n").takeLast(12_000),
+                        )
+                    }
+                }
+            }
+            saveCurrentConversation()
         }
 
         compactHistoryIfNeeded()
@@ -1381,6 +1370,7 @@ class RemoteDataRepository(
                 toolCalls.map { (callId, name, arguments) ->
                     async {
                         val result = toolExecutor.executeTool(name, arguments, conversationIdSnapshot)
+                        recordToolMemory(conversationIdSnapshot, name, result)
                         Triple(callId, name, result)
                     }
                 }.awaitAll()
@@ -1950,7 +1940,7 @@ class RemoteDataRepository(
         // model supports tools), local uses the allowlist-filtered set.
         val hasTools = when (variant) {
             SystemPromptVariant.CHAT_REMOTE -> !isLimited && getAvailableTools().isNotEmpty()
-            SystemPromptVariant.CHAT_LOCAL -> getLocalSafeTools().isNotEmpty() && localModelDeclaresTools(modelId)
+            SystemPromptVariant.CHAT_LOCAL -> getAvailableTools().isNotEmpty() && localModelDeclaresTools(modelId)
         }
 
         val activeSkill = pendingActiveSkillId?.let { skillManager.getSkill(it) }
@@ -2071,7 +2061,7 @@ class RemoteDataRepository(
     override suspend fun setObjectiveStatus(status: String) {
         val conversationId = _currentConversationId.value ?: return
         objectiveStore.update(conversationId) {
-            it?.copy(status = status)
+            it?.copy(status = status, lastRunAtMs = if (status == ObjectiveStatus.RUNNING) 0L else it.lastRunAtMs)
         }
     }
 
@@ -2300,6 +2290,7 @@ class RemoteDataRepository(
         instanceId: String?,
         conversationIdOverride: String?,
         objectiveRunAtMs: Long?,
+        onActivity: ((List<History>) -> Unit)?,
     ): String {
         // Selection: explicit instance > first remote > first on-device. The simple-tool
         // allowlist works at any context size, so on-device is always eligible for fallback.
@@ -2320,9 +2311,28 @@ class RemoteDataRepository(
         if (objectiveRunAtMs != null) {
             val id = requireNotNull(conversationIdOverride) { "Objective recovery needs a bound conversation" }
             val state = objectiveStore.get(id)
-            if (state?.lastRunAtMs != objectiveRunAtMs || state.status !in ObjectiveStatus.ACTIVE) return ""
+            if (state == null || state.lastRunAtMs != objectiveRunAtMs || state.status !in ObjectiveStatus.ACTIVE) return ""
             return withContext(ConversationIdElement(id) + ObjectiveRunElement(objectiveRunAtMs, Uuid.random().toString())) {
-                askWithService(service, messages, OBJECTIVE_RECOVERY_SYSTEM_PROMPT, selectedInstance.instanceId, localHistory).content
+                coroutineScope {
+                    val observer = onActivity?.let { notify ->
+                        launch { localHistory.collect { notify(it) } }
+                    }
+                    try {
+                        val turn = askWithService(service, messages, OBJECTIVE_RECOVERY_SYSTEM_PROMPT, selectedInstance.instanceId, localHistory)
+                        onActivity?.invoke(localHistory.value + History(
+                            role = History.Role.ASSISTANT,
+                            content = "",
+                            reasoningContent = turn.reasoningContent,
+                        ))
+                        objectiveStore.update(id) {
+                            it?.takeIf { current -> current.lastRunAtMs == objectiveRunAtMs }
+                                ?.recordActivity("Run report: ${turn.content}") ?: it
+                        }
+                        turn.content
+                    } finally {
+                        observer?.cancel()
+                    }
+                }
             }
         }
         val systemPrompt = getActiveSystemPrompt()
@@ -2448,7 +2458,7 @@ class RemoteDataRepository(
         conversationStorage.saveConversation(conversation)
     }
 
-    override suspend fun addAssistantMessageTo(conversationId: String, content: String) {
+    override suspend fun addAssistantMessageTo(conversationId: String, content: String, reasoningContent: String?) {
         val now = Clock.System.now().toEpochMilliseconds()
 
         val existing = savedConversations.value.find { it.id == conversationId }
@@ -2457,6 +2467,7 @@ class RemoteDataRepository(
             id = Uuid.random().toString(),
             role = "assistant",
             content = content,
+            reasoningContent = reasoningContent,
         )
 
         // Objective continuations can run long — use the heartbeat-sized cap.
@@ -2473,7 +2484,15 @@ class RemoteDataRepository(
 
         conversationStorage.saveConversation(conversation)
         if (_currentConversationId.value == conversationId) {
-            chatHistory.update { it + History(id = newMessage.id, role = History.Role.ASSISTANT, content = content) }
+            chatHistory.update { it + History(id = newMessage.id, role = History.Role.ASSISTANT, content = content, reasoningContent = reasoningContent) }
+        }
+    }
+
+    private suspend fun recordToolMemory(conversationId: String?, name: String, result: String) {
+        if (conversationId == null) return
+        val run = currentObjectiveRun()
+        objectiveStore.update(conversationId) {
+            if (it != null && (run == null || it.lastRunAtMs == run.startedAtMs)) it.recordActivity("$name: $result") else it
         }
     }
 

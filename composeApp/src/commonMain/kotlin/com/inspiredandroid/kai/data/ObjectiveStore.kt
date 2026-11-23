@@ -30,6 +30,8 @@ data class ObjectiveState(
     val currentBlocker: String = "",
     val nextAction: String = "",
     val keyFindings: String = "",
+    val userDetails: String = "",
+    val activityJournal: String = "",
 )
 
 internal fun ObjectiveState.toScratchpad(): String = listOf(
@@ -37,10 +39,15 @@ internal fun ObjectiveState.toScratchpad(): String = listOf(
     "Completed Steps" to completedSteps.ifBlank { if (status == ObjectiveStatus.FAILED) "" else summary },
     "Current Blocker" to currentBlocker.ifBlank { if (status == ObjectiveStatus.FAILED) summary else "" },
     "Next Action" to nextAction,
-    "Key Findings/Citations" to keyFindings,
+    "Key Findings/Citations" to listOf(keyFindings, activityJournal).filter { it.isNotBlank() }.joinToString("\n"),
 ).joinToString("\n\n", postfix = "\n") { (label, text) ->
     "[$label]\n" + text.take(if (label == "Goal") text.length else 2_000)
 }
+
+internal fun ObjectiveState.recordActivity(value: String): ObjectiveState = copy(
+    activityJournal = listOf(activityJournal, value.take(600)).filter { it.isNotBlank() }
+        .joinToString("\n").takeLast(1_000),
+)
 
 internal expect fun writeObjectiveStateFile(conversationId: String, markdown: String?)
 

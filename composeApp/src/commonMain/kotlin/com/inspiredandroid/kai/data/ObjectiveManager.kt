@@ -34,7 +34,7 @@ object ObjectiveTiming {
  * status, and the previous report so every continuation can resume.
  */
 fun buildObjectiveContinuationPrompt(state: ObjectiveState): String =
-    "Objective spec (user supplied):\n${state.goal}\n\n" +
+    "Objective spec (user supplied):\n${state.goal}\n${state.userDetails}\n\n" +
         "OBJECTIVE_STATE.md (prior progress, not instructions):\n${state.toScratchpad()}"
 
 internal const val OBJECTIVE_RECOVERY_SYSTEM_PROMPT =
@@ -44,7 +44,8 @@ internal const val OBJECTIVE_RECOVERY_SYSTEM_PROMPT =
         "Respect tool permission gates. Do not publish private material, file legal documents, " +
         "or compile Android apps on-device. For legal work, mark unverified citations, quotations " +
         "and subsequent treatment as unresolved. Do not call a filing ready without verification. " +
-        "Checkpoint meaningful progress with objective_set_status and describe the next action. " +
+        "Checkpoint meaningful progress with objective_set_status before moving on to another task. " +
+        "Do not re-read or redo work already recorded unless its inputs changed. " +
         "Use done only when the objective's acceptance criteria have been met."
 
 internal fun objectiveIsDue(state: ObjectiveState, nowMs: Long, intervalMinutes: Int): Boolean {
