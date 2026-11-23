@@ -44,10 +44,11 @@ This keeps working while the app is backgrounded as long as the scheduler is ali
 
 ## UI
 
-- The composer chip row has an **Objective** chip alongside the foreground modes; tapping opens the Set Objective dialog
+- Tap **Objective** in the composer, type the goal in the normal message field, and send it as a chat message. There is no separate goal dialog.
 - While objective mode is active on the current conversation, a banner below the heartbeat banner shows the status dot (pulsing when `running`/`failed`), the goal, the latest summary, and pause/resume/remove
+- The transcript shows running tool names and returned tool activity. Reasoning is shown when supplied by the provider; it is not fabricated for providers that return none. Scheduled runs save their report, returned tool names, and available reasoning in the same conversation.
 - Objective conversations appear in the history sheet with an **Objective** badge and the goal as title
-- The Remove action clears the goal entirely and un-marks the conversation type
+- Pause and Remove cancel an in-flight scheduled continuation. Remove also clears the goal and un-marks the conversation type.
 
 ## Tool
 
@@ -65,5 +66,7 @@ This keeps working while the app is backgrounded as long as the scheduler is ali
 | `composeApp/src/commonMain/.../tools/ObjectiveTools.kt` | `objective_set_status` tool |
 | `composeApp/src/commonMain/.../data/ChatSystemPromptBuilder.kt` | `ActiveObjectiveContext` + `## Objective` prompt section |
 | `composeApp/src/commonMain/.../data/TaskScheduler.kt` | Scheduler loop integration |
-| `composeApp/src/commonMain/.../ui/chat/composables/ObjectiveBanner.kt` | Objective banner + Set Objective dialog |
+| `composeApp/src/commonMain/.../ui/chat/composables/ObjectiveBanner.kt` | Objective status and lifecycle controls |
+| `composeApp/src/commonMain/.../ui/chat/ChatViewModel.kt` | Starts objectives through the composer and merges live activity into the current transcript |
+| `composeApp/src/commonMain/.../ui/chat/composables/ToolMessage.kt` | Waiting and currently executing tool labels |
 | `composeApp/src/commonTest/.../data/ObjectiveRecoveryTest.kt` | Regression tests for checkpoint isolation, retry cadence, and the Draft label |

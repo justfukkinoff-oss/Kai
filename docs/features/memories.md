@@ -1,8 +1,14 @@
 # Memories
 
-**Last verified:** 2026-10-02
+**Last verified:** 2026-11-22 (source and test review; Android runtime not yet verified)
 
-Kai's memory system allows the AI to learn and retain information across conversations. Memories are stored persistently, injected into every system prompt for context, and can be reinforced over time. Well-established memories can be promoted into permanent behavior (the soul/system prompt); the heartbeat surfaces candidates for promotion.
+Kai has two kinds of memory: automatic continuity scoped to one chat, and user-manageable memories that can be shared across chats. Shared memories can be reinforced or promoted into the soul/system prompt. The heartbeat surfaces candidates for promotion.
+
+## Automatic chat continuity
+
+The app saves excerpts of user requests, assistant replies, and completed tool returns to local app settings for the current conversation. The original request and recent entries are retained within bounded limits. When a request can't use the whole transcript, relevant saved excerpts omitted from the request are replayed with the prompt. This does not require a separate model call, a successful model tool call, or the shared-memory toggle. Deleting the conversation deletes its continuity. Entries are excerpts, not an exact transcript or a guarantee of provider compliance.
+
+Scheduled Objective recovery uses its own per-task checkpoint instead of reading another chat or injecting the foreground conversation's continuity.
 
 ## Concepts
 
@@ -33,7 +39,7 @@ The process of graduating a well-reinforced memory into the permanent soul/syste
 - Thread-safe access via mutex for concurrent operations
 - If the stored JSON can no longer be decoded (e.g. after a schema change), the raw blob is backed up under a separate settings key before the next write, so the only copy is never overwritten. The backup is not part of settings export
 - Memory feature is enabled by default
-- When disabled, memory tools are removed from available tools but stored memories are preserved
+- The toggle controls automatic injection of shared memories. Stored memories and callable memory tools are retained.
 
 ## Memory Lifecycle
 
@@ -62,7 +68,7 @@ Built-in memory instructions (included for every chat variant when memory is ena
 - Use `memory_forget` for outdated or incorrect information
 - Avoid storing trivial or transient information
 
-For remote models only, an additional "Structured Learning" section tells the AI to categorize with `memory_learn` (Preference for corrections, Learning for successes, Error for resolutions) and to reinforce memories that produce good outcomes. On-device models don't get this section because `memory_learn` isn't exposed to them.
+For remote models, an additional "Structured Learning" section explains `memory_learn` and reinforcement. A compatible on-device model can also call the registered memory tools.
 
 ## Settings UI
 
@@ -85,7 +91,7 @@ The memories section lives in Settings → Agent and contains:
 | `memory_reinforce` | Increment a memory's hit count |
 | `promote_learning` | Graduate a memory into the soul/system prompt and remove it from the store. Rides the scheduling switch (not the memory switch) and is callable from any conversation, not only heartbeat runs |
 
-`memory_store`, `memory_forget`, and `memory_reinforce` are also exposed to on-device models; `memory_learn` and `promote_learning` are not.
+Tool-capable on-device models can receive the full registered tool set, including memory tools. Tool availability depends on the platform, installed/configured services, and permissions.
 
 ## Key Files
 
@@ -94,10 +100,11 @@ The memories section lives in Settings → Agent and contains:
 | `composeApp/src/commonMain/.../data/MemoryStore.kt` | Core storage, retrieval, reinforcement, deletion, categorization |
 | `composeApp/src/commonMain/.../data/SettingsJson.kt` | Shared settings-backed JSON persistence: decode-or-default, encode-and-write, locked read-modify-write |
 | `composeApp/src/commonMain/.../data/AppSettings.kt` | Persistence layer for memories JSON and enable flag |
-| `composeApp/src/commonMain/.../data/RemoteDataRepository.kt` | Loads memories and memory instructions for the system prompt; on-device tool allowlist |
+| `composeApp/src/commonMain/.../data/ConversationContinuity.kt` | Always-on, conversation-scoped recall |
+| `composeApp/src/commonMain/.../data/RemoteDataRepository.kt` | Checkpoints live tool results and replays saved context when the request history is trimmed |
 | `composeApp/src/commonMain/.../data/ChatSystemPromptBuilder.kt` | Category-grouped memory sections, local 2,000-char budget, Structured Learning section |
 | `composeApp/src/commonMain/.../data/HeartbeatManager.kt` | Surfaces promotion candidates (5+ hits) in the heartbeat prompt |
-| `composeApp/src/commonMain/.../tools/AgentToolSet.kt` | Gates memory tools on the memory switch and `promote_learning` on the scheduling switch |
+| `composeApp/src/commonMain/.../tools/AgentToolSet.kt` | Registers memory tools; `promote_learning` depends on scheduling |
 | `composeApp/src/commonMain/.../tools/CommonTools.kt` | AI tool definitions for memory_store, memory_learn, memory_forget, memory_reinforce |
 | `composeApp/src/commonMain/.../tools/HeartbeatTools.kt` | promote_learning tool |
 | `composeApp/src/commonMain/.../ui/settings/AgentSettings.kt` | Memory management UI (list, all-memories sheet, edit sheet) |

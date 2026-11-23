@@ -93,8 +93,10 @@ object CitationCheckTool : Tool, KoinComponent {
                     withTimeoutOrNull(3.seconds) {
                         controller.executeCommand("rm -f '$directory/draft.txt' '$directory/check.py'; rmdir '$directory'", session)
                     }
+                } catch (_: Exception) {
+                    // Cleanup is best effort; don't discard findings if the sandbox exits.
                 } finally {
-                    controller.closeSession(session)
+                    runCatching { controller.closeSession(session) }
                 }
             }
         }

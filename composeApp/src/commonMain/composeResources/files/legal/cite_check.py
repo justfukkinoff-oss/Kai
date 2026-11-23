@@ -148,6 +148,10 @@ class CourtListener:
             opinion_id = self.opinion_id(uri)
             if opinion_id is None:
                 continue
+            try:
+                self.opinion(uri)  # Warm the local opinion cache even if the draft has no quotes.
+            except ReviewError:
+                pass
             graph = self.request(f"/api/rest/v4/opinions-cited/?cited_opinion={opinion_id}")
             for row in graph.get("results", [])[:5]:
                 citing_id = self.opinion_id(row.get("citing_opinion"))
