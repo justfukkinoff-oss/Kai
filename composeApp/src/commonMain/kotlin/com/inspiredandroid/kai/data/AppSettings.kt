@@ -580,6 +580,13 @@ class AppSettings(internal val settings: Settings) {
         settings.putString(KEY_CHAT_MODE, mode)
     }
 
+    internal fun getModeServiceInstanceId(mode: ChatMode): String? = settings.getStringOrNull("chat_mode_service.${mode.name}")
+
+    internal fun setModeServiceInstanceId(mode: ChatMode, instanceId: String?) {
+        val key = "chat_mode_service.${mode.name}"
+        if (instanceId == null) settings.remove(key) else settings.putString(key, instanceId)
+    }
+
     // Objective mode: flag + goal for the conversation being composed right now.
     fun getCurrentObjectiveMode(): Boolean = settings.getBoolean(KEY_CURRENT_OBJECTIVE_MODE, false)
 

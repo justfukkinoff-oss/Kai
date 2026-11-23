@@ -243,6 +243,9 @@ class RemoteDataRepository(
         current.removeAll { it.instanceId == instanceId }
         appSettings.setConfiguredServiceInstances(current)
         appSettings.removeInstanceSettings(instanceId)
+        for (mode in ChatMode.entries) {
+            if (appSettings.getModeServiceInstanceId(mode) == instanceId) appSettings.setModeServiceInstanceId(mode, null)
+        }
         modelsByInstance.remove(instanceId)
     }
 
@@ -808,6 +811,11 @@ class RemoteDataRepository(
     private data class FallbackEntry(val instanceId: String, val service: Service)
 
     private fun getOrderedFallbackEntries(): List<FallbackEntry> {
+        getModeServiceInstance()?.let {
+            // A selected workload route is intentional; don't silently move its data to
+            // another provider. Reset to the chat default to use the usual fallback chain.
+            return listOf(FallbackEntry(it.instanceId, Service.fromId(it.serviceId)))
+        }
         val instances = getConfiguredServiceInstances()
         val entries = instances.map { FallbackEntry(instanceId = it.instanceId, service = Service.fromId(it.serviceId)) }
             .filter { it.service != Service.Free }
@@ -1647,6 +1655,7 @@ class RemoteDataRepository(
     }
 
     override fun currentService(): Service {
+        getModeServiceInstance()?.let { return Service.fromId(it.serviceId) }
         if (appSettings.isFreeServicePrimary()) return Service.Free
         val instances = getConfiguredServiceInstances()
         return instances.firstOrNull()?.let { Service.fromId(it.serviceId) } ?: Service.Free
@@ -1654,7 +1663,7 @@ class RemoteDataRepository(
 
     /** Model id of the active (first configured, non-Free) instance, or "" when none. */
     private fun currentModelId(): String {
-        val instance = getConfiguredServiceInstances().firstOrNull() ?: return ""
+        val instance = getModeServiceInstance() ?: getConfiguredServiceInstances().firstOrNull() ?: return ""
         val service = Service.fromId(instance.serviceId)
         return appSettings.getInstanceEffectiveModelId(instance.instanceId).ifEmpty { appSettings.getSelectedModelId(service) }
     }
@@ -1880,7 +1889,7 @@ class RemoteDataRepository(
         // On-device services store the active model ID per-instance, not globally, so
         // `getSelectedModelId` comes back blank for LiteRT. Fall back to the first
         // configured on-device instance's model ID in that case.
-        val modelId = appSettings.getSelectedModelId(service).ifBlank {
+        val modelId = currentModelId().ifBlank {
             if (service.isOnDevice) {
                 getConfiguredServiceInstances()
                     .firstOrNull { Service.fromId(it.serviceId).isOnDevice }
@@ -1983,6 +1992,18 @@ class RemoteDataRepository(
 
     override fun setChatMode(mode: ChatMode) {
         appSettings.setChatMode(mode.name)
+    }
+
+    override fun getModeServiceInstance(): ServiceInstance? {
+        val mode = getChatMode()
+        if (mode == ChatMode.CHAT) return null
+        val id = appSettings.getModeServiceInstanceId(mode) ?: return null
+        return getConfiguredServiceInstances().firstOrNull { it.instanceId == id }
+    }
+
+    override fun setModeServiceInstance(instanceId: String?) {
+        val mode = getChatMode()
+        if (mode != ChatMode.CHAT) appSettings.setModeServiceInstanceId(mode, instanceId)
     }
 
     override suspend fun setObjective(goal: String) {

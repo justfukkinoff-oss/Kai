@@ -313,7 +313,8 @@ class ChatViewModel(
      * denied the local network permission. Cheap no-op on non-Android platforms.
      */
     private suspend fun ensureLocalNetworkPermission(): Boolean {
-        val instance = dataRepository.getConfiguredServiceInstances().firstOrNull() ?: return true
+        val instance = dataRepository.getModeServiceInstance()
+            ?: dataRepository.getConfiguredServiceInstances().firstOrNull() ?: return true
         val baseUrl = dataRepository.getInstanceBaseUrl(instance.instanceId, Service.fromId(instance.serviceId))
         if (!isLocalNetworkUrl(baseUrl)) return true
         return localNetworkPermissionController.requestPermission()
@@ -428,6 +429,11 @@ class ChatViewModel(
     }
 
     private fun selectService(instanceId: String) {
+        if (dataRepository.getChatMode() != ChatMode.CHAT) {
+            dataRepository.setModeServiceInstance(instanceId.takeUnless { it == MODE_DEFAULT })
+            updateAvailableServices()
+            return
+        }
         val freeMode = FREE_MODE_INSTANCE_IDS[instanceId]
         if (freeMode != null) {
             dataRepository.setFreeMode(freeMode)
@@ -460,10 +466,17 @@ class ChatViewModel(
             )
         }
 
-        val entries = if (freeIsPrimary) {
+        val defaultEntries = if (freeIsPrimary) {
             freeModes + configuredEntries
         } else {
             configuredEntries + freeModes
+        }
+        val entries = if (dataRepository.getChatMode() == ChatMode.CHAT) {
+            defaultEntries
+        } else {
+            val active = dataRepository.getModeServiceInstance()?.instanceId ?: MODE_DEFAULT
+            val inherited = defaultEntries.first().copy(instanceId = MODE_DEFAULT, serviceName = "Chat default")
+            (listOf(inherited) + configuredEntries).sortedBy { if (it.instanceId == active) 0 else 1 }
         }.toImmutableList()
 
         val primaryService = entries.firstOrNull()?.let { Service.fromId(it.serviceId) }
@@ -476,6 +489,7 @@ class ChatViewModel(
     }
 
     companion object {
+        private const val MODE_DEFAULT = "mode-chat-default"
         private val FREE_MODE_INSTANCE_IDS = FreeMode.entries.associateBy { it.instanceId }
     }
 
@@ -586,6 +600,7 @@ class ChatViewModel(
     private fun setChatMode(mode: ChatMode) {
         dataRepository.setChatMode(mode)
         _state.update { it.copy(chatMode = mode, objectiveArmed = false) }
+        updateAvailableServices()
     }
 
     private fun handleSetChatMode(rawMode: String) = setChatMode(ChatMode.fromName(rawMode))

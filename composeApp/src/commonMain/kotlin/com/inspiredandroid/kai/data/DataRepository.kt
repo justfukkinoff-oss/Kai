@@ -123,6 +123,8 @@ interface DataRepository {
 
     fun getChatMode(): ChatMode
     fun setChatMode(mode: ChatMode)
+    fun getModeServiceInstance(): ServiceInstance? = null
+    fun setModeServiceInstance(instanceId: String?) {}
 
     // Objective mode — one running goal per conversation.
     fun isObjectiveModeActive(): Boolean
