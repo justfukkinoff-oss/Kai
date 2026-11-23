@@ -60,7 +60,11 @@ def connect():
 
 
 def result(**data):
-    print("KAI_LIBRARY " + json.dumps(data, ensure_ascii=True), flush=True)
+    encoded = json.dumps(data, ensure_ascii=True)
+    if len(sys.argv) > 2:
+        Path(sys.argv[2]).write_text(encoded, encoding="utf-8")
+    else:
+        print("KAI_LIBRARY " + encoded, flush=True)
 
 
 def progress(label):

@@ -3,6 +3,7 @@
 package com.inspiredandroid.kai.tools
 
 import com.inspiredandroid.kai.SandboxController
+import com.inspiredandroid.kai.TextFileResult
 import com.inspiredandroid.kai.data.currentConversationIdOrNull
 import com.inspiredandroid.kai.mcp.McpServerManager
 import com.inspiredandroid.kai.network.tools.ParameterSchema
@@ -105,8 +106,8 @@ object CitationCheckTool : Tool, KoinComponent {
                 val mcpMatches = if (mcpTool != null) {
                     val param = mcpTool.schema.parameters.entries.firstOrNull { it.value.required }?.key
                         ?: listOf("citation", "text", "query").first { mcpTool.schema.parameters[it]?.type == "string" }
-                    val extracted = controller.executeCommand("$base --reporters", session)
-                        .lineSequence().lastOrNull { it.startsWith("KAI_CITE_REPORTERS ") }?.substringAfter(' ')
+                    controller.executeCommand("$base --reporters --result '$directory/reporters.json'", session)
+                    val extracted = (controller.readTextFile("$directory/reporters.json") as? TextFileResult.Text)?.content
                     val citations = runCatching {
                         extracted?.let { json.decodeFromString<List<String>>(it) }.orEmpty().take(16)
                     }.getOrDefault(emptyList())
@@ -132,10 +133,18 @@ object CitationCheckTool : Tool, KoinComponent {
                 if (!controller.writeBinaryFile("$directory/options.json", options.toString().encodeToByteArray())) {
                     return@withTimeoutOrNull issue("Citation check unavailable: could not stage request.")
                 }
-                val output = controller.executeCommand("chmod 700 '$directory'; chmod 600 '$directory/options.json'; $base --options '$directory/options.json'", session)
-                val line = output.lineSequence().lastOrNull { it.startsWith("KAI_CITE_CHECK_RESULT ") }
+                val handle = controller.executeCommandStreaming(
+                    "chmod 700 '$directory'; chmod 600 '$directory/options.json'; $base --options '$directory/options.json' --result '$directory/review.json'",
+                    onStdout = {}, onStderr = {}, sessionId = session,
+                )
+                try {
+                    handle.awaitExit()
+                } finally {
+                    if (!handle.isCancelled()) handle.cancel()
+                }
+                val result = controller.readTextFile("$directory/review.json") as? TextFileResult.Text
                     ?: return@withTimeoutOrNull issue("Citation check unavailable: sandbox checker did not return a result.")
-                json.decodeFromString<CitationReview>(line.substringAfter(' '))
+                json.decodeFromString<CitationReview>(result.content)
             } ?: issue("Citation check timed out; the draft was not verified.")
         } catch (e: CancellationException) {
             throw e
@@ -145,10 +154,7 @@ object CitationCheckTool : Tool, KoinComponent {
             withContext(NonCancellable) {
                 try {
                     withTimeoutOrNull(3.seconds) {
-                        controller.deleteEntry("$directory/draft.txt", recursive = false)
-                        controller.deleteEntry("$directory/check.py", recursive = false)
-                        controller.deleteEntry("$directory/options.json", recursive = false)
-                        controller.deleteEntry(directory, recursive = false)
+                        controller.deleteEntry(directory, recursive = true)
                     }
                 } catch (_: Exception) {
                     // Cleanup is best effort; don't discard findings if the sandbox exits.

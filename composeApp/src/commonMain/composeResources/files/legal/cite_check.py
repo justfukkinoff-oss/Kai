@@ -416,6 +416,7 @@ def main():
     cli.add_argument("draft", type=Path)
     cli.add_argument("--reporters", action="store_true")
     cli.add_argument("--options", type=Path)
+    cli.add_argument("--result", type=Path)
     opts = cli.parse_args()
     library = Path(os.environ.get("KAI_LAW_LIBRARY", Path.home() / ".local/share/kai/law"))
     draft = opts.draft.read_text(encoding="utf-8")
@@ -424,7 +425,10 @@ def main():
             reporters = list(dict.fromkeys(c["reporter"] for c in parse_citations(draft) if c["reporter"]))
         except (ImportError, ValueError):
             reporters = []
-        print("KAI_CITE_REPORTERS " + json.dumps(reporters))
+        if opts.result:
+            opts.result.write_text(json.dumps(reporters), encoding="utf-8")
+        else:
+            print("KAI_CITE_REPORTERS " + json.dumps(reporters))
         return
     options = {}
     if opts.options:
@@ -432,7 +436,11 @@ def main():
         opts.options.unlink(missing_ok=True)
     result = review(draft, CourtListener(options.get("token") or os.environ.get("COURTLISTENER_TOKEN"), library,
                                         options.get("mcp"), options.get("matter", "")))
-    print("KAI_CITE_CHECK_RESULT " + json.dumps(result, ensure_ascii=True))
+    encoded = json.dumps(result, ensure_ascii=True)
+    if opts.result:
+        opts.result.write_text(encoded, encoding="utf-8")
+    else:
+        print("KAI_CITE_CHECK_RESULT " + encoded)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ package com.inspiredandroid.kai.tools
 
 import com.inspiredandroid.kai.CommandHandle
 import com.inspiredandroid.kai.SandboxController
+import com.inspiredandroid.kai.TextFileResult
 import com.inspiredandroid.kai.data.AppSettings
 import com.inspiredandroid.kai.data.currentConversationIdOrNull
 import com.inspiredandroid.kai.mcp.McpServerManager
@@ -103,23 +104,22 @@ internal object LegalLibrary : KoinComponent {
                 if (!sandbox.writeBinaryFile(path, upload)) return issue("Could not copy the upload.")
             }
             if (!sandbox.writeBinaryFile("$folder/request.json", payload.toString().encodeToByteArray())) return issue("Could not stage library request.")
-            val stdout = MutableStateFlow("")
             val stderr = MutableStateFlow("")
             handle = sandbox.executeCommandStreaming(
                 "chmod 700 '$folder'; chmod 600 '$folder/request.json'; " +
                     "py=python3; if [ -x /root/.kai/legal-venv/bin/python ]; then py=/root/.kai/legal-venv/bin/python; fi; " +
-                    "\"\$py\" -u '$folder/library.py' '$folder/request.json'",
-                onStdout = { value ->
-                    stdout.update { (it + value + "\n").takeLast(400_000) }
+                    "\"\$py\" -u '$folder/library.py' '$folder/request.json' '$folder/response.json' 1>&2",
+                onStdout = {},
+                onStderr = { value ->
+                    stderr.update { (it + value).takeLast(2000) }
                     value.lineSequence().filter { it.startsWith("KAI_PROGRESS ") }.forEach { onProgress(it.substringAfter(' ').trim()) }
                 },
-                onStderr = { value -> stderr.update { (it + value).takeLast(2000) } },
                 sessionId = session,
             )
             handle.awaitExit()
-            val line = stdout.value.substringAfterLast("KAI_LIBRARY ", "").lineSequence().first().trim()
-            if (line.isEmpty()) return issue(if (stderr.value.contains("python3")) "Python is unavailable; run Set up sandbox." else "The library worker did not return a result.")
-            return Json.parseToJsonElement(line) as? JsonObject ?: issue("Invalid library response.")
+            val response = sandbox.readTextFile("$folder/response.json", maxBytes = 1_000_000) as? TextFileResult.Text
+                ?: return issue(if (stderr.value.contains("python3")) "Python is unavailable; run Set up sandbox." else "The library worker did not return a readable result.")
+            return Json.parseToJsonElement(response.content) as? JsonObject ?: issue("Invalid library response.")
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
