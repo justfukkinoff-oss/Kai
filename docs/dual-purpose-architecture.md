@@ -4,7 +4,7 @@
 
 - **Application**: The shared Kotlin/Compose app owns the composer, settings, tool orchestration, model adapters, and scheduling. The Android app hosts the PRoot runtime and includes the existing Build workspace and attachment ingestion.
 - **Providers and tools**: Reuse configured provider instances (including OpenRouter, NVIDIA, and OpenAI-compatible endpoints) rather than building a second chat client. The app already supports remote MCP, GitHub Actions, and a sandbox shell.
-- **Builds**: Use the checked-in arm64 debug workflow. Independently verify the job conclusions and match the APK and commit SHA before installation. The existing sandbox distribution selector does not offer Ubuntu; validate any Ubuntu rootfs option on an actual Android device before changing the default.
+- **Builds and sandbox**: Use the checked-in arm64 debug workflow. Verify job conclusions and match the APK and commit SHA before installation. Reuse Kai's PRoot sandbox and shell; the user reports an Ubuntu-enabled installed build. The [RikkaLaw-U.S. feature review](rikkalaw-us-feature-review.md) records the audited source baseline and the proposed legal-workflow merge.
 - **In the working tree**: Research and Draft modes, a separate report-only citation check after Draft replies, per-mode chat routes, and Objective recovery with live activity in the normal chat transcript. Conversation continuity is written by the app without a separate model call. See [citation review](features/citation-review.md) for current coverage and setup.
 
 ## Next implementation slices
