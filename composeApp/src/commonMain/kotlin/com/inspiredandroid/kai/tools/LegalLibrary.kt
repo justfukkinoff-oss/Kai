@@ -6,6 +6,7 @@ import com.inspiredandroid.kai.CommandHandle
 import com.inspiredandroid.kai.SandboxController
 import com.inspiredandroid.kai.data.AppSettings
 import com.inspiredandroid.kai.data.currentConversationIdOrNull
+import com.inspiredandroid.kai.mcp.McpServerManager
 import com.inspiredandroid.kai.network.tools.ParameterSchema
 import com.inspiredandroid.kai.network.tools.Tool
 import com.inspiredandroid.kai.network.tools.ToolSchema
@@ -19,6 +20,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -47,6 +49,8 @@ internal object LegalLibrary : KoinComponent {
 
     fun currentMatter() = settings.getCurrentConversationId()?.let(::matterFor)
     fun matterFor(chat: String) = settings.libraryValue("matter.$chat").takeIf { it.isNotBlank() }
+    fun courtListenerToken() = settings.libraryValue("courtListenerToken")
+    fun saveCourtListenerToken(value: String) = settings.setLibraryValue("courtListenerToken", value.trim())
     fun bind(matter: String): Boolean {
         val chat = settings.getCurrentConversationId() ?: return false
         settings.setLibraryValue("matter.$chat", matter)
@@ -94,6 +98,7 @@ internal object LegalLibrary : KoinComponent {
         }
         try {
             if (!sandbox.writeBinaryFile("$folder/library.py", Res.readBytes("files/legal/library.py"))) return issue("Could not stage library worker.")
+            if (action == "export" && !sandbox.writeBinaryFile("$folder/filing.py", Res.readBytes("files/legal/filing.py"))) return issue("Could not stage filing formatter.")
             if (upload != null) {
                 val path = (payload["path"] as? JsonPrimitive)?.content ?: return issue("Missing upload name.")
                 if (!sandbox.writeBinaryFile(path, upload)) return issue("Could not copy the upload.")
@@ -102,9 +107,11 @@ internal object LegalLibrary : KoinComponent {
             val stdout = MutableStateFlow("")
             val stderr = MutableStateFlow("")
             handle = sandbox.executeCommandStreaming(
-                "chmod 700 '$folder'; chmod 600 '$folder/request.json'; python3 -u '$folder/library.py' '$folder/request.json'",
+                "chmod 700 '$folder'; chmod 600 '$folder/request.json'; " +
+                    "py=python3; if [ -x /root/.kai/legal-venv/bin/python ]; then py=/root/.kai/legal-venv/bin/python; fi; " +
+                    "\"\$py\" -u '$folder/library.py' '$folder/request.json'",
                 onStdout = { value ->
-                    stdout.update { (it + value).takeLast(400_000) }
+                    stdout.update { (it + value + "\n").takeLast(400_000) }
                     value.lineSequence().filter { it.startsWith("KAI_PROGRESS ") }.forEach { onProgress(it.substringAfter(' ').trim()) }
                 },
                 onStderr = { value -> stderr.update { (it + value).takeLast(2000) } },
@@ -134,10 +141,11 @@ internal object LegalLibrary : KoinComponent {
         try {
             handle = sandbox.executeCommandStreaming(
                 "if command -v apk >/dev/null; then apk add python3 py3-pip poppler-utils tesseract-ocr tesseract-ocr-data-eng; " +
-                    "elif command -v apt-get >/dev/null; then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-venv poppler-utils tesseract-ocr; else exit 2; fi",
+                    "elif command -v apt-get >/dev/null; then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-venv poppler-utils tesseract-ocr; else exit 2; fi && " +
+                    "python3 -m venv /root/.kai/legal-venv && /root/.kai/legal-venv/bin/python -m pip install eyecite",
                 onStdout = { onProgress(it.trim()) }, onStderr = { onProgress(it.trim()) }, sessionId = session,
             )
-            return if (handle.awaitExit() == 0) "PDF extraction and local English OCR are ready." else "Sandbox setup did not finish. See the terminal for package errors."
+            return if (handle.awaitExit() == 0) "PDF extraction, local English OCR, and citation parsing are ready." else "Sandbox setup did not finish. See the terminal for package errors."
         } finally {
             handle?.cancel()
             sandbox.closeSession(session)
@@ -145,6 +153,43 @@ internal object LegalLibrary : KoinComponent {
     }
 
     suspend fun open(path: String) = sandbox.openFile(path).fold({ "Opened original" }, { "Could not open original" })
+}
+
+internal object FilingExportTool : Tool, KoinComponent {
+    private val sandbox: SandboxController by inject()
+    private val mcp: McpServerManager by inject()
+    override val timeout = 6.minutes
+    override val schema = ToolSchema("filing_export", "Export a filing with Times New Roman 13 pt, double spacing, one-inch margins, caption, TOC, TOA, and service certificate. Citation review is advisory. Use heading lines starting with # and provide actual service details; never invent them.", mapOf(
+        "draft" to ParameterSchema("string", "Main filing body", true),
+        "caption" to ParameterSchema("string", "Complete case caption", true),
+        "title" to ParameterSchema("string", "Filing title", true),
+        "service" to ParameterSchema("string", "User-supplied certificate of service; omit when unknown", false),
+        "authorities" to ParameterSchema("string", "Optional newline-separated authority entries", false),
+        "format" to ParameterSchema("string", "docx, pdf, or both; default docx", false),
+    ))
+
+    override suspend fun execute(args: Map<String, Any>): Any {
+        val draft = args["draft"] as? String ?: return "Draft required."
+        if (draft.length > 500_000) return "Export request exceeds 500,000 characters."
+        val inputs = args.filterKeys { it in schema.parameters }.filterValues { it is String }
+        var output: Any? = null
+        for (provider in listOf("revise", "doxai")) {
+            val tool = mcp.compatibleTool(provider, listOf("format_document", "export_document", "format_filing")) { candidate ->
+                candidate.schema.parameters.keys.containsAll(listOf("draft", "caption", "title", "service", "authorities", "format")) &&
+                    candidate.schema.parameters.none { (key, value) -> value.required && key !in inputs }
+            } ?: continue
+            val response = withTimeoutOrNull(25_000) { tool.execute(inputs) } as? Map<*, *>
+            val result = response?.get("result") as? JsonElement
+            if (response?.get("success") == true && result != null && result !is JsonArray) {
+                output = mapOf("provider" to provider, "result" to result.toString())
+                break
+            }
+        }
+        val localArgs = inputs.mapValues { JsonPrimitive(it.value.toString()) }
+        val exported = output ?: LegalLibrary.call("export", args = localArgs).toString()
+        val review = CitationCheckTool.review(draft, sandbox)
+        return mapOf("export" to exported, "citation_review" to review.message(), "citation_sources" to review.sources)
+    }
 }
 
 internal object LegalLibraryTools {

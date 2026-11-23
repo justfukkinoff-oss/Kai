@@ -442,6 +442,8 @@ def search(db, request, routes):
 
 def dispatch(db, r, work):
     action, scope, routes = r["action"], r.get("scope",""), r.get("routes",{})
+    if action == "exports":
+        return {"files": [{"name": f.name, "path": str(f)} for f in sorted((ROOT / "exports").glob("*")) if f.is_file()]}
     if action == "matters":
         return {"matters":[dict(row) for row in db.execute("SELECT * FROM matters ORDER BY name")]}
     if action == "matter_create":
@@ -495,6 +497,10 @@ if __name__ == "__main__":
         request_file = Path(sys.argv[1])
         payload = json.loads(request_file.read_text())
         request_file.unlink(missing_ok=True)
-        result(**dispatch(connect(),payload,request_file.parent))
+        if payload["action"] == "export":
+            from filing import export
+            result(**export(payload, ROOT / "exports", request_file.parent))
+        else:
+            result(**dispatch(connect(),payload,request_file.parent))
     except Exception as exc:
         result(error=f"{type(exc).__name__}: {exc}")

@@ -164,6 +164,21 @@ class McpServerManager(private val appSettings: AppSettings) {
         }
     }
 
+    internal fun compatibleTool(provider: String, candidates: List<String>, accept: (Tool) -> Boolean): Tool? {
+        for (server in getServers()) {
+            if (!server.isEnabled || !("${server.id} ${server.name}").contains(provider, ignoreCase = true)) continue
+            val client = clients[server.id] ?: continue
+            for (meta in discoveredTools[server.id].orEmpty()) {
+                val name = meta.name.lowercase().replace('-', '_')
+                if (candidates.none { name == it || name.endsWith("_$it") }) continue
+                if (!appSettings.isToolEnabled(McpTool.toolId(server.id, meta.name))) continue
+                val tool = McpTool(client, meta)
+                if (accept(tool)) return tool
+            }
+        }
+        return null
+    }
+
     suspend fun connectEnabledServers() {
         val enabledServers = getServers().filter { it.isEnabled }
         coroutineScope {

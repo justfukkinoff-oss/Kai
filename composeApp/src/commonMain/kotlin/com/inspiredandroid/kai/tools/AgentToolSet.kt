@@ -27,6 +27,7 @@ fun buildAgentToolSet(
     addAll(CommonTools.getCommonTools(appSettings))
     add(CitationCheckTool)
     addAll(LegalLibraryTools.tools)
+    add(FilingExportTool)
 
     addAll(CommonTools.getMemoryTools(memoryStore))
 
