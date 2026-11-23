@@ -151,9 +151,8 @@ private interface ToolLoopStrategy {
     suspend fun bailout(history: List<History>, systemPrompt: String?, reason: BailoutReason): String
 
     /**
-     * Context budget used to trim the request copy of the history each tool round. Providers that
-     * send the history as-is (Gemini, Anthropic) declare their window here; the OpenAI-compatible
-     * strategy trims the built message list inside [chat] instead and leaves this null.
+     * Context budget used to trim the request copy of the history each tool round. The
+     * OpenAI-compatible strategy also checks its final wire representation.
      */
     val historyContextWindowTokens: Int? get() = null
 }
@@ -550,8 +549,9 @@ class RemoteDataRepository(
             }
         }
 
+        val toolPrompt = withToolCatalog(systemPrompt, localTools.map { it.name })
         return try {
-            engine.chat(messages = inferenceMessages, systemPrompt = systemPrompt, tools = localTools)
+            engine.chat(messages = inferenceMessages, systemPrompt = toolPrompt, tools = localTools)
         } catch (e: RuntimeException) {
             if (e is kotlinx.coroutines.CancellationException || objectiveRecovery) throw e
             // litert-lm's strict ANTLR function-call parser sometimes rejects malformed
@@ -708,14 +708,22 @@ class RemoteDataRepository(
         }
 
         if (tools.isEmpty()) {
-            return plainChat(service, creds, messages, systemPrompt, strictEmptyResponse = true)
+            val prompt = if (history === chatHistory) withContinuity(systemPrompt, messages) else systemPrompt
+            return plainChat(service, creds, messages, prompt, strictEmptyResponse = true)
         }
 
+        val toolPrompt = withToolCatalog(systemPrompt, tools.map { it.schema.name })
         return when (service) {
-            Service.Gemini -> handleGeminiChatWithTools(creds, messages, tools, systemPrompt, history)
-            Service.Anthropic -> handleAnthropicChatWithTools(creds, messages, tools, systemPrompt, history)
-            else -> handleOpenAICompatibleChatWithTools(service, creds, messages, tools, systemPrompt, history)
+            Service.Gemini -> handleGeminiChatWithTools(creds, messages, tools, toolPrompt, history)
+            Service.Anthropic -> handleAnthropicChatWithTools(creds, messages, tools, toolPrompt, history)
+            else -> handleOpenAICompatibleChatWithTools(service, creds, messages, tools, toolPrompt, history)
         }
+    }
+
+    private fun withToolCatalog(prompt: String?, names: List<String>): String? {
+        if (names.isEmpty()) return prompt
+        return prompt.orEmpty() + "\n\nCallable tools for this request (schemas supplied separately): " +
+            names.distinct().sorted().joinToString(", ") + "."
     }
 
     /**
@@ -1024,7 +1032,7 @@ class RemoteDataRepository(
                 // Retrying the whole call would re-enter the tool loop against a chat
                 // history already mutated by the failed attempt.
                 val turn = try {
-                    askWithService(entry.service, messages, systemPrompt, entry.instanceId)
+                    askWithService(entry.service, messages, baseSystemPrompt, entry.instanceId)
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
                     // On-device services should not silently fall back — surface the error
@@ -1090,6 +1098,8 @@ class RemoteDataRepository(
         // assembly, tool-call pairing, context trimming — is shared.
         val useResponsesApi = requiresResponsesApi(service, credentials.modelId, credentials.baseUrl)
         val strategy = object : ToolLoopStrategy {
+            override val historyContextWindowTokens = contextWindowTokens
+
             override suspend fun chat(history: List<History>, systemPrompt: String?): LoopChatResult {
                 val msgs = trimMessagesForContext(buildOpenAIMessages(service, history, systemPrompt, credentials.modelId, declaredToolNames), contextWindowTokens)
                 if (useResponsesApi) {
@@ -1246,13 +1256,17 @@ class RemoteDataRepository(
             val visible = history.value.filter { it.role != History.Role.TOOL_EXECUTING }.let { full ->
                 // Trim a request copy only — the history flow is the visible, persisted conversation.
                 strategy.historyContextWindowTokens
-                    ?.let { trimHistoryForContext(full, systemPrompt?.length ?: 0, it).ifEmpty { full } }
+                    ?.let {
+                        val reserve = (systemPrompt?.length ?: 0) + if (history === chatHistory) 6_000 else 0
+                        trimHistoryForContext(full, reserve, it).ifEmpty { full }
+                    }
                     ?: full
             }
+            val requestPrompt = if (history === chatHistory) withContinuity(systemPrompt, visible) else systemPrompt
             if (iteration > MAX_TOOL_ITERATIONS) {
-                return AssistantTurn(strategy.bailout(visible, systemPrompt, BailoutReason.LIMIT_REACHED))
+                return AssistantTurn(strategy.bailout(visible, requestPrompt, BailoutReason.LIMIT_REACHED))
             }
-            val result = strategy.chat(visible, systemPrompt)
+            val result = strategy.chat(visible, requestPrompt)
             if (result.toolCalls.isEmpty()) {
                 // For thinking-only turns, the reasoning text already became the content via
                 // `isContentFromReasoning`, so don't surface it again as a reasoning trace.
@@ -1262,7 +1276,7 @@ class RemoteDataRepository(
 
             val signatures = result.toolCalls.map { "${it.name}:${it.arguments.hashCode()}" }
             if (isRepeatingToolCalls(recentSignatures, signatures)) {
-                return AssistantTurn(strategy.bailout(visible, systemPrompt, BailoutReason.REPEATING))
+                return AssistantTurn(strategy.bailout(visible, requestPrompt, BailoutReason.REPEATING))
             }
             recentSignatures.addAll(signatures)
 
