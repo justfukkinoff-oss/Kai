@@ -139,12 +139,9 @@ internal const val DRAFT_MODE_SECTION =
     "## Active Mode: Draft\n" +
         "Produce review drafts only. For legal filings, tie factual assertions to the record " +
         "and verify each authority, pinpoint, quotation, and subsequent treatment from sources. " +
-        "Do not present a filing as verified or ready to file without a successful cite_check. " +
-        "If cite_check is unavailable or inconclusive, label the draft UNVERIFIED and list " +
-        "what needs review. Never file or serve documents."
-
-internal fun markDraftUnverified(content: String): String =
-    "**UNVERIFIED DRAFT: Citation and quotation checks are not enforced by this build. Not ready to file.**\n\n$content"
+        "Kai runs cite_check after producing the reply and reports unresolved items separately. " +
+        "Do not run a redundant check on the same text unless the user asks. Do not claim " +
+        "that any item is verified without evidence."
 
 /**
  * Hard-coded system prompt of this app. This is NOT a generic persona. Re-Kai is a

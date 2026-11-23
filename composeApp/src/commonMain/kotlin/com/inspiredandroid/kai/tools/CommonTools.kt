@@ -252,6 +252,7 @@ object CommonTools {
         SchedulingTools.schedulingToolDefinitions +
         HeartbeatTools.heartbeatToolDefinitions +
         ObjectiveTools.getToolInfos() +
+        listOf(CitationCheckTool.toolInfo) +
         EmailTools.emailToolDefinitions +
         SmsTools.smsToolDefinitions +
         NotificationTools.notificationToolDefinitions

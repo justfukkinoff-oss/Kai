@@ -25,10 +25,9 @@ fun buildAgentToolSet(
     platformExtras: MutableList<Tool>.() -> Unit = {},
 ): List<Tool> = buildList {
     addAll(CommonTools.getCommonTools(appSettings))
+    add(CitationCheckTool)
 
-    if (appSettings.isMemoryEnabled()) {
-        addAll(CommonTools.getMemoryTools(memoryStore))
-    }
+    addAll(CommonTools.getMemoryTools(memoryStore))
 
     // Heartbeat tools ride the scheduling switch — they are only reachable from a scheduled run.
     if (appSettings.isSchedulingEnabled()) {

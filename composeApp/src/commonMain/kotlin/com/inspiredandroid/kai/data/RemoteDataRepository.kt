@@ -58,6 +58,7 @@ import com.inspiredandroid.kai.sms.SmsReader
 import com.inspiredandroid.kai.sms.SmsSendResult
 import com.inspiredandroid.kai.sms.SmsSender
 import com.inspiredandroid.kai.tools.NotificationListenerController
+import com.inspiredandroid.kai.tools.CitationCheckTool
 import com.inspiredandroid.kai.tools.PermissionController
 import com.inspiredandroid.kai.ui.chat.History
 import com.inspiredandroid.kai.ui.chat.ToolCallInfo
@@ -1034,7 +1035,7 @@ class RemoteDataRepository(
                         add(
                             History(
                                 role = History.Role.ASSISTANT,
-                                content = if (draftMode) markDraftUnverified(turn.content) else turn.content,
+                                content = turn.content,
                                 reasoningContent = turn.reasoningContent,
                                 fallbackServiceName = fallbackServiceName,
                             ),
@@ -1042,6 +1043,11 @@ class RemoteDataRepository(
                     }
                 }
                 saveCurrentConversation()
+                if (draftMode && turn.content.isNotBlank()) {
+                    val draftConversation = _currentConversationId.value
+                    val review = CitationCheckTool.review(turn.content, sandboxController)
+                    if (draftConversation != null) addAssistantMessageTo(draftConversation, review.message())
+                }
                 return
             }
 
@@ -2466,6 +2472,9 @@ class RemoteDataRepository(
         )
 
         conversationStorage.saveConversation(conversation)
+        if (_currentConversationId.value == conversationId) {
+            chatHistory.update { it + History(id = newMessage.id, role = History.Role.ASSISTANT, content = content) }
+        }
     }
 
     override suspend fun getOrCreateHeartbeatConversationId(): String {

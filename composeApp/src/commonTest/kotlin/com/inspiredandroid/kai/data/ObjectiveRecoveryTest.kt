@@ -58,9 +58,8 @@ class ObjectiveRecoveryTest {
     }
 
     @Test
-    fun researchAndDraftModesAreRecognizedAndDraftLabelCannotBeOmitted() {
+    fun researchAndDraftModesAreRecognized() {
         assertEquals(ChatMode.RESEARCH, ChatMode.fromName("RESEARCH"))
         assertEquals(ChatMode.DRAFT, ChatMode.fromName("DRAFT"))
-        assertTrue(markDraftUnverified("Ready to file").startsWith("**UNVERIFIED DRAFT:"))
     }
 }
