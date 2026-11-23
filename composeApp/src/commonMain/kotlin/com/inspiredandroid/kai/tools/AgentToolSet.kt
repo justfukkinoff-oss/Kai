@@ -26,6 +26,7 @@ fun buildAgentToolSet(
 ): List<Tool> = buildList {
     addAll(CommonTools.getCommonTools(appSettings))
     add(CitationCheckTool)
+    addAll(LegalLibraryTools.tools)
 
     addAll(CommonTools.getMemoryTools(memoryStore))
 

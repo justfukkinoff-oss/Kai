@@ -582,6 +582,12 @@ class AppSettings(internal val settings: Settings) {
 
     internal fun getModeServiceInstanceId(mode: ChatMode): String? = settings.getStringOrNull("chat_mode_service.${mode.name}")
 
+    internal fun libraryValue(key: String): String = settings.getString("library.$key", "")
+
+    internal fun setLibraryValue(key: String, value: String) {
+        if (value.isBlank()) settings.remove("library.$key") else settings.putString("library.$key", value)
+    }
+
     internal fun setModeServiceInstanceId(mode: ChatMode, instanceId: String?) {
         val key = "chat_mode_service.${mode.name}"
         if (instanceId == null) settings.remove(key) else settings.putString(key, instanceId)
