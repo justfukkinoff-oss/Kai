@@ -1048,26 +1048,19 @@ class RemoteDataRepository(
                 if (index > 0) {
                     fallbackServiceName = entry.service.displayName
                 }
-                chatHistory.update {
-                    it.toMutableList().apply {
-                        add(
-                            History(
-                                role = History.Role.ASSISTANT,
-                                content = turn.content,
-                                reasoningContent = turn.reasoningContent,
-                                fallbackServiceName = fallbackServiceName,
-                            ),
-                        )
-                    }
-                }
+                val reply = History(
+                    role = History.Role.ASSISTANT,
+                    content = turn.content,
+                    reasoningContent = turn.reasoningContent,
+                    fallbackServiceName = fallbackServiceName,
+                )
+                chatHistory.update { it + reply }
                 saveCurrentConversation()
                 if (draftMode && turn.content.isNotBlank()) {
                     val draftConversation = _currentConversationId.value
                     if (draftConversation != null) backgroundScope.launch {
                         val review = CitationCheckTool.review(turn.content, sandboxController)
-                        if (savedConversations.value.any { it.id == draftConversation }) {
-                            addAssistantMessageTo(draftConversation, review.message())
-                        }
+                        addCitationReportAfter(draftConversation, reply.id, review.message())
                     }
                 }
                 return
@@ -2439,6 +2432,25 @@ class RemoteDataRepository(
 
     override fun consumeOpenShareRequest() {
         _pendingShareText.value = null
+    }
+
+    private suspend fun addCitationReportAfter(conversationId: String, draftId: String, content: String) {
+        conversationWriteMutex.withLock {
+            val conversation = savedConversations.value.find { it.id == conversationId } ?: return
+            val index = conversation.messages.indexOfFirst { it.id == draftId }
+            if (index < 0) return
+            val message = Conversation.Message(id = Uuid.random().toString(), role = "assistant", content = content)
+            val row = History(id = message.id, role = History.Role.ASSISTANT, content = message.content)
+            if (_currentConversationId.value == conversationId) {
+                chatHistory.update { history ->
+                    val replyIndex = history.indexOfFirst { it.id == draftId }
+                    if (replyIndex < 0) history else history.toMutableList().apply { add(replyIndex + 1, row) }
+                }
+            }
+            conversationStorage.saveConversation(conversation.copy(
+                messages = conversation.messages.toMutableList().apply { add(index + 1, message) },
+            ))
+        }
     }
 
     override suspend fun addAssistantMessage(content: String) {

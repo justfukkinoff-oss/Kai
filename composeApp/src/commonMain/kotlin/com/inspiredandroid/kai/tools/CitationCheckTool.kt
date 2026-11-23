@@ -91,7 +91,9 @@ object CitationCheckTool : Tool, KoinComponent {
             withContext(NonCancellable) {
                 try {
                     withTimeoutOrNull(3.seconds) {
-                        controller.executeCommand("rm -f '$directory/draft.txt' '$directory/check.py'; rmdir '$directory'", session)
+                        controller.deleteEntry("$directory/draft.txt", recursive = false)
+                        controller.deleteEntry("$directory/check.py", recursive = false)
+                        controller.deleteEntry(directory, recursive = false)
                     }
                 } catch (_: Exception) {
                     // Cleanup is best effort; don't discard findings if the sandbox exits.

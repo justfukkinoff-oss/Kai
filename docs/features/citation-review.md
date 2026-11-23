@@ -2,7 +2,7 @@
 
 **Last verified:** 2026-11-22 (local fixture tests; Android integration not yet verified)
 
-Draft mode posts the response immediately, then adds a separate citation-review message in the same conversation. The checker never blocks drafting, editing, sending another message, or exporting. Tool-capable models can also call `cite_check` for text they need reviewed outside Draft mode.
+Draft mode posts the response immediately, then adds a separate citation-review message immediately after the reply it checked, even if a newer draft arrived first. The checker never blocks drafting, editing, sending another message, or exporting. Tool-capable models can also call `cite_check` for text they need reviewed outside Draft mode.
 
 ## What the report covers
 

@@ -1,6 +1,6 @@
 # Multi-Service
 
-**Last verified:** 2026-10-02
+**Last verified:** 2026-11-22 (source review; Android runtime not yet verified)
 
 Kai supports 31 LLM providers (plus a built-in Free tier). Each provider uses one of three API formats: **OpenAI-compatible** (most services), **Gemini native**, or **Anthropic native** -- plus **LiteRT on-device** for local inference. A handful of OpenAI models additionally require OpenAI's **Responses API**; Kai switches to it per model, transparently. Users can configure multiple service instances, reorder them, and Kai automatically falls back through the chain on failure.
 
