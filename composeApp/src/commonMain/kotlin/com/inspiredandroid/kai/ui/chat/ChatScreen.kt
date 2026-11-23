@@ -88,7 +88,6 @@ import com.inspiredandroid.kai.ui.chat.composables.ErrorMessage
 import com.inspiredandroid.kai.ui.chat.composables.FreeProviderSuggestionsPanel
 import com.inspiredandroid.kai.ui.chat.composables.HeartbeatBanner
 import com.inspiredandroid.kai.ui.chat.composables.ObjectiveBanner
-import com.inspiredandroid.kai.ui.chat.composables.ObjectiveDialog
 import com.inspiredandroid.kai.ui.chat.composables.PendingSmsBanners
 import com.inspiredandroid.kai.ui.chat.composables.QuestionInput
 import com.inspiredandroid.kai.ui.chat.composables.ServiceSelector
@@ -505,7 +504,6 @@ private fun ChatModeScreen(
     previewSandboxLines: ImmutableList<TerminalLine> = persistentListOf(),
 ) {
     var showHistorySheet by remember { mutableStateOf(false) }
-    var showObjectiveDialog by remember { mutableStateOf(false) }
     var isSandboxOpen by rememberSaveable { mutableStateOf(initialSandboxOpen) }
     // Hoisted here so the draft survives toggling the sandbox/terminal view, which
     // removes QuestionInput from composition and would otherwise drop the text.
@@ -594,10 +592,7 @@ private fun ChatModeScreen(
                     objective = uiState.activeObjective,
                     onPause = uiState.actions.pauseObjective,
                     onResume = uiState.actions.resumeObjective,
-                    onRemove = {
-                        uiState.actions.setObjective("")
-                        showObjectiveDialog = false
-                    },
+                    onRemove = { uiState.actions.setObjective("") },
                 )
             }
 
@@ -896,14 +891,22 @@ private fun ChatModeScreen(
                                             }
 
                                             History.Role.TOOL -> {
-                                                // Don't show completed tool results in UI
+                                                val name = history.toolName
+                                                if (!name.isNullOrBlank()) {
+                                                    Text(
+                                                        text = "$name · completed",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 3.dp),
+                                                    )
+                                                }
                                             }
                                         }
                                     }
                                     // Skip the generic "thinking" row during a pending kai-ui submission — the
                                     // pressed button's pulse already signals work in flight. Keep it for tool
                                     // activity so tool feedback isn't lost.
-                                    val showWaitingRow = uiState.isLoading &&
+                                    val showWaitingRow = (uiState.isLoading || uiState.objectiveRunning) &&
                                         (frozenByAssistantId.values.none { it.isPending } || executingToolsState.tools.isNotEmpty())
                                     if (showWaitingRow) {
                                         item(key = "loading") {
@@ -976,8 +979,9 @@ private fun ChatModeScreen(
                     installedSkills = uiState.installedSkills,
                     chatMode = uiState.chatMode,
                     onChatModeSelect = { uiState.actions.setChatMode(it.name) },
-                    objectiveMode = uiState.objectiveMode,
-                    onOpenObjective = { showObjectiveDialog = true },
+                    objectiveMode = uiState.objectiveMode || uiState.objectiveArmed,
+                    objectiveArmed = uiState.objectiveArmed,
+                    onOpenObjective = uiState.actions.toggleObjective,
                 )
             }
         }
@@ -988,16 +992,6 @@ private fun ChatModeScreen(
             Snackbar(snackbarData = data)
         }
     }
-
-    ObjectiveDialog(
-        visible = showObjectiveDialog,
-        initialGoal = uiState.activeObjective?.goal.orEmpty(),
-        onConfirm = { goal ->
-            showObjectiveDialog = false
-            uiState.actions.setObjective(goal)
-        },
-        onDismiss = { showObjectiveDialog = false },
-    )
 
     if (showHistorySheet) {
         ChatHistorySheet(

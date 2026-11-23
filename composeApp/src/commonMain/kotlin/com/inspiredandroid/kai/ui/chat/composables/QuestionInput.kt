@@ -80,6 +80,7 @@ import kai.composeapp.generated.resources.chat_mode_chat
 import kai.composeapp.generated.resources.chat_mode_draft
 import kai.composeapp.generated.resources.chat_mode_plan
 import kai.composeapp.generated.resources.chat_mode_research
+import kai.composeapp.generated.resources.chat_objective_hint
 import kai.composeapp.generated.resources.chat_objective_mode
 import kai.composeapp.generated.resources.ic_stop
 import kai.composeapp.generated.resources.ic_up
@@ -108,6 +109,7 @@ fun QuestionInput(
     chatMode: ChatMode? = null,
     onChatModeSelect: (ChatMode) -> Unit = {},
     objectiveMode: Boolean = false,
+    objectiveArmed: Boolean = false,
     onOpenObjective: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -122,7 +124,7 @@ fun QuestionInput(
                 for (mode in ChatMode.entries) {
                     FilterChip(
                         modifier = Modifier.handCursor(),
-                        selected = mode == chatMode,
+                        selected = mode == chatMode && !objectiveMode,
                         onClick = { onChatModeSelect(mode) },
                         label = {
                             Text(
@@ -281,7 +283,7 @@ fun QuestionInput(
             colors = outlineTextFieldColors(),
             placeholder = {
                 Text(
-                    stringResource(Res.string.prompt_ask_question),
+                    stringResource(if (objectiveArmed) Res.string.chat_objective_hint else Res.string.prompt_ask_question),
                     color = MaterialTheme.colorScheme.onBackground,
                 )
             },

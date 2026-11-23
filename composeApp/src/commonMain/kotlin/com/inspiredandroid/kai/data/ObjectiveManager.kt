@@ -1,12 +1,17 @@
 package com.inspiredandroid.kai.data
 
 import com.inspiredandroid.kai.getBackgroundDispatcher
+import com.inspiredandroid.kai.ui.chat.History
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeoutOrNull
@@ -62,6 +67,8 @@ internal fun objectiveIsDue(state: ObjectiveState, nowMs: Long, intervalMinutes:
  * in flight, and failed runs are restarted on later sweeps — [ObjectiveStatus.FAILED]
  * is an active status. Paused and done objectives are never executed.
  */
+data class ObjectiveActivity(val conversationId: String? = null, val entries: List<History> = emptyList())
+
 class ObjectiveManager(
     private val dataRepository: DataRepository,
     private val objectiveStore: ObjectiveStore,
@@ -72,9 +79,13 @@ class ObjectiveManager(
 ) {
     private val runMutex = Mutex()
 
-    /** Set true while a continuation is executing so the UI can show it. */
-    private val _runningConversationId = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
-    val runningConversationId: kotlinx.coroutines.flow.StateFlow<String?> = _runningConversationId
+    private val mutableActivity = MutableStateFlow(ObjectiveActivity())
+    val activity = mutableActivity.asStateFlow()
+    private val activeRun = MutableStateFlow<Pair<String, Job>?>(null)
+
+    fun cancel(conversationId: String) {
+        activeRun.value?.takeIf { it.first == conversationId }?.second?.cancel()
+    }
 
     private val scope = CoroutineScope(SupervisorJob() + backgroundDispatcher + CoroutineName("ObjectiveManager"))
 
@@ -99,7 +110,15 @@ class ObjectiveManager(
                         }
                     }
                     val state = claimed ?: continue
-                    runContinuation(conversationId, state, config.heartbeatInstanceId)
+                    coroutineScope {
+                        val job = launch { runContinuation(conversationId, state, config.heartbeatInstanceId) }
+                        activeRun.value = conversationId to job
+                        try {
+                            job.join()
+                        } finally {
+                            activeRun.value = null
+                        }
+                    }
                 }
             } finally {
                 runMutex.unlock()
@@ -108,7 +127,8 @@ class ObjectiveManager(
     }
 
     private suspend fun runContinuation(conversationId: String, state: ObjectiveState, instanceId: String?) {
-        _runningConversationId.value = conversationId
+        mutableActivity.value = ObjectiveActivity(conversationId)
+        var reasoning: String? = null
         try {
             val response = withTimeoutOrNull(ObjectiveTiming.RUN_TIMEOUT_MS) {
                 dataRepository.askWithTools(
@@ -116,12 +136,17 @@ class ObjectiveManager(
                     instanceId = instanceId,
                     conversationIdOverride = conversationId,
                     objectiveRunAtMs = state.lastRunAtMs,
+                    onActivity = { entries ->
+                        val visible = entries.filter { it.role != History.Role.USER }
+                        reasoning = visible.lastOrNull()?.reasoningContent ?: reasoning
+                        mutableActivity.value = ObjectiveActivity(conversationId, visible)
+                    },
                 )
             }
             if (response == null) {
                 markFailed(conversationId, state)
             } else if (response.isNotBlank()) {
-                dataRepository.addAssistantMessageTo(conversationId, response)
+                dataRepository.addAssistantMessageTo(conversationId, response, reasoning)
             }
             // No status flip here: the agent reports through the objective_set_status tool.
             // A run that neither completes nor fails is still active and re-visited.
@@ -130,7 +155,7 @@ class ObjectiveManager(
         } catch (_: Exception) {
             markFailed(conversationId, state)
         } finally {
-            _runningConversationId.value = null
+            mutableActivity.value = ObjectiveActivity()
         }
     }
 

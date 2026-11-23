@@ -82,6 +82,7 @@ data class ChatUiState(
     val supportedFileExtensions: ImmutableList<String> = persistentListOf(),
     val chatMode: ChatMode = ChatMode.CHAT,
     val objectiveMode: Boolean = false,
+    val objectiveArmed: Boolean = false,
     val activeObjective: ObjectiveState? = null,
     val objectiveRunning: Boolean = false,
     val isSpeaking: Boolean = false,

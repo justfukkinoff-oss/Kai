@@ -219,6 +219,7 @@ interface DataRepository {
         instanceId: String? = null,
         conversationIdOverride: String? = null,
         objectiveRunAtMs: Long? = null,
+        onActivity: ((List<History>) -> Unit)? = null,
     ): String
 
     // Silent ask (no tools, no chat history update)

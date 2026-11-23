@@ -6,6 +6,7 @@ import com.inspiredandroid.kai.data.ChatMode
 import com.inspiredandroid.kai.data.Conversation
 import com.inspiredandroid.kai.data.DataRepository
 import com.inspiredandroid.kai.data.ObjectiveManager
+import com.inspiredandroid.kai.data.ObjectiveActivity
 import com.inspiredandroid.kai.data.ObjectiveState
 import com.inspiredandroid.kai.data.ObjectiveStatus
 import com.inspiredandroid.kai.data.FreeMode
@@ -85,6 +86,7 @@ class ChatViewModel(
         consumeComposerPrefill = ::consumeComposerPrefill,
         setChatMode = ::handleSetChatMode,
         setObjective = ::setObjective,
+        toggleObjective = ::toggleObjective,
         pauseObjective = ::pauseObjective,
         resumeObjective = ::resumeObjective,
     )
@@ -168,11 +170,11 @@ class ChatViewModel(
         }
 
         viewModelScope.launch {
-            objectiveManager?.runningConversationId?.collect { runningId ->
+            objectiveManager?.activity?.collect { activity ->
                 _state.update {
                     it.copy(
-                        objectiveRunning = runningId != null &&
-                            runningId == dataRepository.currentConversationId.value,
+                        objectiveRunning = activity.conversationId != null &&
+                            activity.conversationId == dataRepository.currentConversationId.value,
                         activeObjective = dataRepository.getActiveObjective(),
                     )
                 }
@@ -180,13 +182,15 @@ class ChatViewModel(
         }
     }
 
+    private val objectiveActivity = objectiveManager?.activity ?: MutableStateFlow(ObjectiveActivity())
+
     val state = combine(
         _state,
         dataRepository.chatHistory,
         dataRepository.savedConversations,
         dataRepository.currentConversationId,
-        dataRepository.hasUnreadHeartbeat,
-    ) { state, history, conversations, conversationId, hasUnreadHeartbeat ->
+        combine(dataRepository.hasUnreadHeartbeat, objectiveActivity) { unread, activity -> unread to activity },
+    ) { state, history, conversations, conversationId, (hasUnreadHeartbeat, activity) ->
         val summaries = conversations
             .sortedByDescending { it.updatedAt }
             .map {
@@ -203,7 +207,7 @@ class ChatViewModel(
                 )
             }
         state.copy(
-            history = history.toImmutableList(),
+            history = (history + activity.entries.takeIf { activity.conversationId == conversationId }.orEmpty()).toImmutableList(),
             supportedFileExtensions = dataRepository.supportedFileExtensions().toImmutableList(),
             savedConversations = summaries.toImmutableList(),
             currentConversationId = conversationId,
@@ -212,6 +216,7 @@ class ChatViewModel(
             chatMode = dataRepository.getChatMode(),
             objectiveMode = dataRepository.isObjectiveModeActive(),
             activeObjective = dataRepository.getActiveObjective(),
+            objectiveRunning = conversationId != null && activity.conversationId == conversationId,
         )
     }.distinctUntilChanged().stateIn(
         scope = viewModelScope,
@@ -268,6 +273,12 @@ class ChatViewModel(
                 return@launch
             }
             try {
+                if (_state.value.objectiveArmed && !question.isNullOrBlank() &&
+                    dataRepository.getActiveObjective() == null
+                ) {
+                    dataRepository.setObjective(question)
+                    _state.update { it.copy(objectiveArmed = false, activeObjective = dataRepository.getActiveObjective()) }
+                }
                 dataRepository.ask(strippedQuestion, files, uiSubmission, activeSkillId)
 
                 // Auto-retry in interactive mode if the response has no valid kai-ui
@@ -488,6 +499,7 @@ class ChatViewModel(
                 isLoading = false,
                 composerPrefill = null,
                 objectiveMode = dataRepository.isObjectiveModeActive(),
+                objectiveArmed = false,
                 activeObjective = dataRepository.getActiveObjective(),
             )
         }
@@ -559,6 +571,7 @@ class ChatViewModel(
                 isLoading = false,
                 composerPrefill = composerPrefill,
                 objectiveMode = false,
+                objectiveArmed = false,
                 activeObjective = null,
                 objectiveRunning = false,
             )
@@ -572,29 +585,39 @@ class ChatViewModel(
 
     private fun setChatMode(mode: ChatMode) {
         dataRepository.setChatMode(mode)
-        _state.update { it.copy(chatMode = mode) }
+        _state.update { it.copy(chatMode = mode, objectiveArmed = false) }
     }
 
     private fun handleSetChatMode(rawMode: String) = setChatMode(ChatMode.fromName(rawMode))
 
     private fun setObjective(goal: String) {
-        viewModelScope.launch { dataRepository.setObjective(goal) }
-        _state.update {
-            it.copy(
-                objectiveMode = goal.isNotBlank(),
-                activeObjective = dataRepository.getActiveObjective(),
-            )
+        viewModelScope.launch {
+            dataRepository.setObjective(goal)
+            _state.update {
+                it.copy(objectiveMode = goal.isNotBlank(), objectiveArmed = false, activeObjective = dataRepository.getActiveObjective())
+            }
         }
     }
 
+    private fun toggleObjective() {
+        if (dataRepository.getActiveObjective() != null) return
+        _state.update { it.copy(objectiveArmed = !it.objectiveArmed) }
+    }
+
     private fun pauseObjective() {
-        viewModelScope.launch { dataRepository.setObjectiveStatus(ObjectiveStatus.PAUSED) }
-        _state.update { it.copy(activeObjective = dataRepository.getActiveObjective()) }
+        viewModelScope.launch {
+            dataRepository.setObjectiveStatus(ObjectiveStatus.PAUSED)
+            dataRepository.currentConversationId.value?.let { objectiveManager?.cancel(it) }
+            _state.update { it.copy(activeObjective = dataRepository.getActiveObjective()) }
+        }
     }
 
     private fun resumeObjective() {
-        viewModelScope.launch { dataRepository.setObjectiveStatus(ObjectiveStatus.RUNNING) }
-        _state.update { it.copy(activeObjective = dataRepository.getActiveObjective()) }
+        viewModelScope.launch {
+            dataRepository.setObjectiveStatus(ObjectiveStatus.RUNNING)
+            _state.update { it.copy(activeObjective = dataRepository.getActiveObjective()) }
+            objectiveManager?.runDueObjectives { _state.value.isLoading }
+        }
     }
 
     private fun enterInteractiveMode() {

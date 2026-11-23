@@ -31,6 +31,7 @@ data class ChatActions(
     val consumeComposerPrefill: () -> Unit,
     val setChatMode: (String) -> Unit = {},
     val setObjective: (String) -> Unit = {},
+    val toggleObjective: () -> Unit = {},
     val pauseObjective: () -> Unit = {},
     val resumeObjective: () -> Unit = {},
 )
