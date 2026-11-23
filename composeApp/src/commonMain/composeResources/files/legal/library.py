@@ -102,7 +102,7 @@ def normalized_vector(values):
 
 def embed(route, values, role):
     body = {"model": route["model"], "input": values, "encoding_format": "float"}
-    if "nvidia.com" in (urllib.parse.urlsplit(route["url"]).hostname or ""):
+    if route.get("format") == "nvidia" or "nvidia.com" in (urllib.parse.urlsplit(route["url"]).hostname or ""):
         body.update(input_type=role, truncate="END")
     rows = sorted(post(route, "embeddings", body)["data"], key=lambda x: x["index"])
     if [row["index"] for row in rows] != list(range(len(values))):
@@ -111,7 +111,7 @@ def embed(route, values, role):
 
 
 def fingerprint(route):
-    return hashlib.sha256((route["url"].rstrip("/") + "\n" + route["model"] + "\nraw-v1").encode()).hexdigest()
+    return hashlib.sha256((route["url"].rstrip("/") + "\n" + route["model"] + "\n" + route.get("format", "") + "\nraw-v1").encode()).hexdigest()
 
 
 def dot(a, b):
@@ -149,7 +149,7 @@ def zip_text(path):
 
 def vision(route, image, photo=False):
     suffix = image.suffix.lower()
-    mime = {".jpg": "jpeg", ".jpeg": "jpeg", ".webp": "webp"}.get(suffix, "png")
+    mime = {".jpg": "jpeg", ".jpeg": "jpeg", ".webp": "webp", ".tif": "tiff", ".tiff": "tiff"}.get(suffix, "png")
     data = base64.b64encode(image.read_bytes()).decode()
     cue = ("Describe observable contents of this photo. Do not infer identity or legal meaning."
            if photo else "Transcribe only. Preserve exact line breaks, line numbers, speakers, Bates labels, ECF headers and exhibit stamps; mark unclear text [illegible], never invent.")
@@ -162,7 +162,12 @@ def ocr_page(path, routes, photo=False):
     if photo:
         return (vision(routes["photo"], path, True), "photo-description") if routes.get("photo") else ("", "needs_photo_model")
     if routes.get("ocr"):
-        raw, method = vision(routes["ocr"], path), "vision"
+        try:
+            raw, method = vision(routes["ocr"], path), "vision"
+        except Exception:
+            if not shutil.which("tesseract"):
+                return "", "needs_ocr"
+            raw, method = run(["tesseract", str(path), "stdout"]).decode("utf-8", "replace"), "tesseract-fallback"
     elif shutil.which("tesseract"):
         raw, method = run(["tesseract", str(path), "stdout"]).decode("utf-8", "replace"), "tesseract"
     else:
@@ -276,7 +281,11 @@ def ingest(db, request, scope, routes, work):
     if not src.is_file() or src.stat().st_size > 80_000_000:
         raise ValueError("Choose a readable file of at most 80 MB")
     title = request.get("title") or src.name
-    digest = hashlib.file_digest(src.open("rb"), "sha256").hexdigest()
+    digest_builder = hashlib.sha256()
+    with src.open("rb") as stream:
+        for block in iter(lambda: stream.read(256 * 1024), b""):
+            digest_builder.update(block)
+    digest = digest_builder.hexdigest()
     identifier = hashlib.sha256((scope + "\n" + digest).encode()).hexdigest()[:32]
     suffix = Path(title).suffix.lower()
     if not re.fullmatch(r"\.[a-z0-9]{1,8}", suffix):
@@ -289,7 +298,8 @@ def ingest(db, request, scope, routes, work):
         return {"document": identifier, "title": existing["title"], "path": existing["origin"], "status": message, "duplicate": True}
     if not original.exists():
         shutil.copyfile(src, original)
-    pages = list(load_pages(original, routes, work, bool(request.get("photo"))))
+    pages = list(load_pages(original, routes, work, bool(request.get("photo")) or bool(existing and
+        db.execute("SELECT 1 FROM pages WHERE doc=? AND method IN ('photo-description','needs_photo_model')", (identifier,)).fetchone())))
     if not pages:
         raise ValueError("No readable pages")
     progress("Building keyword and citation index")
@@ -304,12 +314,29 @@ def ingest(db, request, scope, routes, work):
             printed = re.search(r"(?im)^\s*(?:page\s+)?(\d{1,5})\s*$", raw)
             val = lambda match: match[1].strip() if match else ""
             db.execute("INSERT INTO pages VALUES(?,?,?,?,?,?,?,?)", (identifier,page,raw,method,val(printed),val(bates),val(ecf),val(exhibit)))
+            indexed = raw
+            cleanup = routes.get("cleanup") if method.startswith(("vision", "tesseract")) else None
+            if cleanup and raw.strip() and len(raw) < 14000:
+                try:
+                    cleaned = post(cleanup, "chat/completions", {"model": cleanup["model"], "messages": [
+                        {"role": "system", "content": "Correct only obvious OCR errors. Return one line per original line, unchanged order and count. Preserve source identifiers and mark unclear words [illegible]."},
+                        {"role": "user", "content": raw},
+                    ]})["choices"][0]["message"]["content"]
+                    original_lines, cleaned_lines = raw.splitlines(keepends=True), cleaned.splitlines()
+                    if len(original_lines) == len(cleaned_lines):
+                        # Preserve raw offsets and line positions. Extra predicted characters are not taken as evidence.
+                        indexed = "".join(fixed[:len(line.rstrip('\r\n'))].ljust(len(line.rstrip('\r\n'))) + line[len(line.rstrip('\r\n')):]
+                                          for line, fixed in zip(original_lines, cleaned_lines))
+                except Exception:
+                    progress(f"OCR cleanup unavailable for page {page}; retained raw transcription")
             for start, end, heading, speaker, first, last in chunks(raw, routes.get("embedding") if request.get("embed", True) else None):
                 text = raw[start:end]
                 cid = db.execute("INSERT INTO chunks(doc,page,start,end,line_start,line_end,speaker,heading,text) VALUES(?,?,?,?,?,?,?,?,?)",
                                  (identifier,page,start,end,first,last,speaker,heading,text)).lastrowid
                 values = [x[0] for x in IDENT.finditer(text)] + [val(bates),val(ecf),val(exhibit),request.get("docket","")]
                 db.executemany("INSERT OR IGNORE INTO keys VALUES(?,?)", [(cid,key(x)) for x in values if x])
+                if indexed != raw:
+                    db.execute("UPDATE fts SET text=? WHERE rowid=?", (text + "\n" + indexed[start:end], cid))
                 total += 1
     status = "Keyword index ready"
     if request.get("embed", True):

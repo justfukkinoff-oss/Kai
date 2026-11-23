@@ -253,6 +253,7 @@ object CommonTools {
         HeartbeatTools.heartbeatToolDefinitions +
         ObjectiveTools.getToolInfos() +
         listOf(CitationCheckTool.toolInfo) +
+        LegalLibraryTools.tools.map { ToolInfo(id = it.schema.name, name = it.schema.name.replace('_', ' '), description = it.schema.description, userToggleable = false) } +
         EmailTools.emailToolDefinitions +
         SmsTools.smsToolDefinitions +
         NotificationTools.notificationToolDefinitions
