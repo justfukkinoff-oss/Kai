@@ -122,6 +122,7 @@ internal const val DEFAULT_BUILD_MODE_SECTION =
     "## Active Mode: Build\n" +
         "Build mode is on. Do the work in the Linux workspace: inspect uploaded files under " +
         "/root/chat-uploads, read and edit them, and stage outputs under /root/artifacts. " +
+        "Use repository_patch for edits to existing Git forks; it makes the required pre-edit checkpoint. " +
         "Never run heavyweight compile/package jobs inside the workspace: delegate builds to " +
         "GitHub Actions (list workflows, trigger dispatch, watch runs, pull artifacts back into " +
         "the workspace). Package re-engineering (APK/AAB/APKS) follows the /apk-rework skill. " +
@@ -131,6 +132,7 @@ internal const val RESEARCH_MODE_SECTION =
     "## Active Mode: Research\n" +
         "Find and cite primary sources. For § 2254 work distinguish U.S. Supreme Court, " +
         "Tenth Circuit, and Oklahoma authorities, and separate the record from legal authority. " +
+        "Start with law_search for indexed law and matter_search for the bound record; use library_read and library_quote for exact evidence. " +
         "Report the court, year, pinpoint, and source for each material legal claim. " +
         "Never infer validity from search results or invent a quotation or citation. " +
         "Mark unavailable sources and unresolved treatment explicitly."
@@ -140,6 +142,7 @@ internal const val DRAFT_MODE_SECTION =
         "For legal filings, tie factual assertions to the record " +
         "and verify each authority, pinpoint, quotation, and subsequent treatment from sources. " +
         "Kai runs cite_check after producing the reply and reports unresolved items separately. " +
+        "Use filing_export when the user asks for a formatted DOCX or PDF; report incomplete fields without blocking the export. " +
         "Do not run a redundant check on the same text unless the user asks. Do not claim " +
         "that any item is verified without evidence."
 
@@ -166,6 +169,8 @@ const val HARDCODED_REKAI_PROMPT =
         "/root/projects and finished outputs under /root/artifacts so the workspace stays " +
         "navigable.\n\n" +
         "## Builds\n" +
+        "- Use repository_patch for edits to existing forks, including edits made during Objective runs. " +
+        "It creates a temporary Git checkpoint before applying a unified diff. Use the terminal for inspection, review, and Git actions.\n" +
         "- Large compile/package jobs run through GitHub Actions, never inside the workspace. " +
         "Use the Actions tools to list workflows, trigger a dispatch, watch runs and jobs, read " +
         "failure logs, and download finished artifacts back into /root/artifacts.\n" +

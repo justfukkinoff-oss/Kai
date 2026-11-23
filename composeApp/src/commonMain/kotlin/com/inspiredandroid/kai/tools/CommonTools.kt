@@ -252,7 +252,9 @@ object CommonTools {
         SchedulingTools.schedulingToolDefinitions +
         HeartbeatTools.heartbeatToolDefinitions +
         ObjectiveTools.getToolInfos() +
-        listOf(CitationCheckTool.toolInfo) +
+        listOf(CitationCheckTool.toolInfo,
+            ToolInfo(FilingExportTool.schema.name, "Export filing", FilingExportTool.schema.description, userToggleable = false),
+            ToolInfo(RepositoryPatchTool.schema.name, "Apply Git patch", RepositoryPatchTool.schema.description, userToggleable = false)) +
         LegalLibraryTools.tools.map { ToolInfo(id = it.schema.name, name = it.schema.name.replace('_', ' '), description = it.schema.description, userToggleable = false) } +
         EmailTools.emailToolDefinitions +
         SmsTools.smsToolDefinitions +
