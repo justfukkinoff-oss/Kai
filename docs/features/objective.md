@@ -1,6 +1,6 @@
 # Objective Mode
 
-**Last verified:** 2026-11-20
+**Last verified:** 2026-11-22
 
 Objective mode lets the user state one final goal and have agents work toward it across multiple unattended runs — continuing or restarting after failures until the agent reports the objective complete.
 
@@ -17,6 +17,7 @@ Persisted per objective conversation in app settings (JSON map keyed by conversa
 | `summary` | Latest agent self-report (progress / blockers) |
 | `lastRunAtMs` | When the last continuation run started (drives backoff + min interval) |
 | `attempts` | Number of continuation runs performed |
+| Progress sections | Completed steps, current blocker, next action, and key findings/citations |
 
 Statuses `running` and `failed` are **active**: the scheduler keeps running them. `paused` and `done` are terminal for scheduling until the user resumes them.
 
@@ -26,22 +27,24 @@ Setting an objective on the current conversation marks it with type `objective` 
 
 ### Headless runs
 
-`ObjectiveManager.runContinuation()` sends the continuation prompt through `DataRepository.askWithTools(prompt, conversationIdOverride = <objective conversation id>)` — a fresh single-message history with the objective's system prompt (goal, status, attempts, last summary plus the instruction to advance the work and self-report via `objective_set_status`). The assistant's answer is also appended to the objective conversation so the user can read the run report in chat.
+Each scheduled run starts a fresh model context with a dedicated system prompt, the user-supplied objective spec, and the structured checkpoint. It does not include chat history, ambient memories, active skills, or the open chat's mode. The run's report is stored in the objective conversation for the user, but is not replayed as chat history.
+
+On Android and desktop the app also writes a per-conversation `objectives/<conversation-id>/OBJECTIVE_STATE.md` under its app files directory, outside the project checkout. The file mirrors the same checkpoint used for recovery; app settings remain authoritative if the mirror cannot be written. The file is plaintext app data, not a secure vault. Keep confidential exhibits in the matter library rather than pasting them into the checkpoint.
 
 ## Scheduling behaviour
 
 The scheduler loop (`TaskScheduler`) calls `objectiveManager?.runDueObjectives { isLoadingCheck() }` every tick, alongside heartbeats:
 
 - Runs are serialized with a mutex and skipped entirely while the user is actively chatting (`isLoadingCheck`)
-- `running` objectives wait `MIN_INTERVAL_MS` (5 min) between runs
-- `failed` objectives retry after `FAILED_RETRY_DELAY_MS` (10 min)
-- Each run is capped at `RUN_TIMEOUT_MS` (20 min); timeout or exception marks the objective `failed` and bumps `attempts`, so the next tick retries after backoff
+- Active objectives use the configured Heartbeat interval. Failed runs wait at least ten minutes. The first run of a new objective is eligible on the next scheduler tick.
+- Objectives use the configured Heartbeat model when selected. If that model was removed, the run fails instead of switching providers silently. If no model was set, Kai prefers the first configured remote entry, then the first on-device entry. The model must support the objective checkpoint tool.
+- Runs are capped at twenty minutes. A timeout or exception leaves the prior progress intact and marks an active run for retry; a late report from an obsolete run cannot overwrite a replacement objective.
 
 This keeps working while the app is backgrounded as long as the scheduler is alive — same model as heartbeats, not a foreground service.
 
 ## UI
 
-- The composer chip row has an **Objective** chip (alongside Chat/Plan/Build); tapping opens the Set Objective dialog
+- The composer chip row has an **Objective** chip alongside the foreground modes; tapping opens the Set Objective dialog
 - While objective mode is active on the current conversation, a banner below the heartbeat banner shows the status dot (pulsing when `running`/`failed`), the goal, the latest summary, and pause/resume/remove
 - Objective conversations appear in the history sheet with an **Objective** badge and the goal as title
 - The Remove action clears the goal entirely and un-marks the conversation type
@@ -50,15 +53,17 @@ This keeps working while the app is backgrounded as long as the scheduler is ali
 
 | Tool | Description |
 |---|---|
-| `objective_set_status` | The agent calls this during an objective run to report lifecycle (`running` / `done` / `failed`) plus a summary. The store entry is keyed to the bound conversation id |
+| `objective_set_status` | Reports lifecycle (`running` / `done` / `failed`), a summary, and optional structured progress fields. Updates land on the bound conversation. A model cannot use this tool to resume a paused objective. |
 
 ## Key Files
 
 | File | Purpose |
 |---|---|
 | `composeApp/src/commonMain/.../data/ObjectiveStore.kt` | `ObjectiveState`, `ObjectiveStatus`, settings-JSON persistence |
+| `composeApp/src/jvmShared/.../data/ObjectiveStateFile.kt` | Atomic checkpoint mirror on Android and desktop |
 | `composeApp/src/commonMain/.../data/ObjectiveManager.kt` | Due-run evaluation, continuation prompts, headless `askWithTools` runs, backoff/timeouts |
 | `composeApp/src/commonMain/.../tools/ObjectiveTools.kt` | `objective_set_status` tool |
 | `composeApp/src/commonMain/.../data/ChatSystemPromptBuilder.kt` | `ActiveObjectiveContext` + `## Objective` prompt section |
 | `composeApp/src/commonMain/.../data/TaskScheduler.kt` | Scheduler loop integration |
 | `composeApp/src/commonMain/.../ui/chat/composables/ObjectiveBanner.kt` | Objective banner + Set Objective dialog |
+| `composeApp/src/commonTest/.../data/ObjectiveRecoveryTest.kt` | Regression tests for checkpoint isolation, retry cadence, and the Draft label |

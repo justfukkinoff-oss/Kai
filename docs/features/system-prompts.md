@@ -1,6 +1,6 @@
 # System Prompts
 
-**Last verified:** 2026-11-20
+**Last verified:** 2026-11-22
 
 Kai has several distinct prompt-construction paths. Each one is built by a **pure function** with explicit inputs (no DI, no suspend, no resource loading, no clocks) and is covered by a unit-test suite so future edits don't silently break unrelated variations.
 
@@ -11,6 +11,7 @@ Kai has several distinct prompt-construction paths. Each one is built by a **pur
 | Chat (remote) | `buildChatSystemPrompt(variant = CHAT_REMOTE, …)` | `ChatSystemPromptBuilderTest` | Any remote service (OpenAI, Anthropic, Gemini, etc.) via `RemoteDataRepository.ask()` |
 | Chat (on-device) | `buildChatSystemPrompt(variant = CHAT_LOCAL, …)` | `ChatSystemPromptBuilderTest` | LiteRT via `RemoteDataRepository.askWithLocalEngine()` |
 | Heartbeat | `buildHeartbeatPrompt(…)` | `HeartbeatPromptBuilderTest` | `TaskScheduler` via `HeartbeatManager.buildHeartbeatPrompt()` — sent as a USER message, not a system prompt |
+| Objective recovery | Dedicated recovery system prompt plus spec and checkpoint | `ObjectiveRecoveryTest` | Scheduler, without the ambient chat prompt, memories, or chat history |
 | Splinterlands LLM picker | `buildLlmPrompt(…)` in `SplinterlandsTeamPicker.kt` | `SplinterlandsTeamPickerPromptTest` | `SplinterlandsBattleRunner` — fully isolated, does not use the chat prompt builder |
 
 The on-device tool allowlist (`LOCAL_TOOL_ALLOWLIST` in `RemoteDataRepository.kt`) decides which tools reach the on-device engine. Renaming a tool without updating that set silently drops it from the on-device path.
@@ -37,7 +38,7 @@ The on-device tool allowlist (`LOCAL_TOOL_ALLOWLIST` in `RemoteDataRepository.kt
 | `## Heartbeat Additions` | when list non-empty | never | `heartbeatAdditions` — standing `schedule_task(on_heartbeat=true)` entries the AI can see/reference/cancel |
 | `## Active skill: <name>` | when activated | when activated | `activeSkill` param — non-null only when the user prefixed the current turn's message with `/<skill-id>` matching an installed, enabled skill. Emits the skill's instruction body plus a list of any bundled files (available at `~/skills/<id>/` in the sandbox). Zero bytes on every other turn. See [skills.md](skills.md) |
 | `## Context` | always | always | `runtime` param (local time with offset + IANA zone, UTC, platform, model, provider). Local time leads so the model anchors on the user's wall clock when computing relative times |
-| `## Mode: Chat/Plan/Build` | CHAT: none; PLAN/BUILD: always | always | `mode` param (`ChatMode` from settings) — PLAN injects the no-side-effects plan-only section, BUILD injects the workspace + GitHub Actions delegation section (uploads in `/root/chat-uploads`, artifacts in `/root/artifacts`, `~/skills/apk-rework` for APK work) |
+| Active mode | Chat: none; other modes: always | Same as remote | Plan describes read-only planning; Build delegates to GitHub Actions; Research requests primary sources and pinpoints; Draft requires a review-only result. These prompt instructions do not enforce tool permissions. |
 | `## Objective` | when an objective is set on the conversation | never | `activeObjective` param (`ActiveObjectiveContext` from `ObjectiveStore`) — goal, lifecycle status, attempt count, latest summary, plus instructions to self-report via `objective_set_status` |
 | `## Dynamic UI` | when Dynamic UI is enabled in settings and the model supports tool calls (not in interactive mode) | never | Dynamic UI setting + model tool support |
 | `## Interactive UI Mode` | when the conversation is in interactive mode | never | Interactive mode flag (takes precedence over Dynamic UI) |

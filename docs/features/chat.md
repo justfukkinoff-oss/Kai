@@ -1,6 +1,6 @@
 # Chat & Conversations
 
-**Last verified:** 2026-11-20
+**Last verified:** 2026-11-22
 
 Kai's chat system manages the message history, conversation persistence, file attachments, and speech output. Conversations are service-independent — switching providers does not affect which conversation is loaded or restored. Multiple conversations are persisted and browsable via a history sheet.
 
@@ -104,13 +104,15 @@ Multiple files can be attached to a single prompt. Each file is added one at a t
 - Long filenames in chips are truncated with an ellipsis while preserving the extension
 - File attachments persist across conversation save/restore via an `attachments` list on each message; older conversations saved with a single-file schema are migrated on load. An attachment large enough to push its message past the storage cap is dropped from the saved copy (see [Conversation Storage](#conversation-storage)) — the message text stays
 
-## Chat / Plan / Build modes
+## Chat / Plan / Build / Research / Draft modes
 
-The composer shows a chip row above the input — **Chat**, **Plan**, **Build**, and **Objective**. The first three select a chat mode persisted in app settings and injected into every system prompt via `buildChatSystemPrompt(mode = …)`:
+The composer shows **Chat**, **Plan**, **Build**, **Research**, **Draft**, and **Objective**. The first five select the foreground mode, which is persisted in app settings and included in the chat's system prompt:
 
 - **Chat** — default; no extra section
 - **Plan** — appends the Plan-mode section: analyse and produce a plan, run **no side-effecting tools**, do not modify the workspace
 - **Build** — appends the Build-mode section: work in the sandbox workspace (`/root/chat-uploads` inputs, `/root/artifacts` outputs) and delegate heavy compile/sign steps to **GitHub Actions** instead of building inside proot
+- **Research**: requests primary authorities, jurisdiction and pinpoints, and separates the record from legal authority for habeas research.
+- **Draft**: asks for review drafts only. The app labels replies **UNVERIFIED DRAFT** independently of what the model writes; the mandatory citation gate and export controls are not yet implemented.
 
 The mode is global (not per conversation). See [system-prompts.md](system-prompts.md).
 
@@ -119,7 +121,7 @@ The mode is global (not per conversation). See [system-prompts.md](system-prompt
 **Objective** in the chip row opens a dialog where the user states a final goal. The current conversation becomes an objective conversation (persisted type `objective`, titled with the goal):
 
 - A banner below the heartbeat banner shows the goal, the latest status/summary, and pause / resume / remove controls
-- `ObjectiveManager`, driven by the scheduler loop, periodically runs continuation prompts on the objective conversation — independent of which chat is open — until the agent reports `objective_set_status(done)` or the run fails (10-minute retry backoff, 20-minute per-run timeout)
+- The scheduler periodically continues the objective independently of the open chat. Failed runs retry after at least ten minutes; a single run can take up to twenty minutes. See [Objective Mode](objective.md) for recovery details.
 - Continuation runs respect the heartbeats-only-when-idle rule: the manager is invoked with the loading state and skips while the user is actively chatting
 - The agent self-reports progress with the `objective_set_status` tool. Details: [objective.md](objective.md)
 

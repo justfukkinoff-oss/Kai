@@ -1,6 +1,6 @@
 # GitHub Actions Build Tools
 
-**Last verified:** 2026-11-20
+**Last verified:** 2026-11-22
 
 Re-Kai deliberately does **not** build Android artifacts inside the proot workspace. Instead the agent delegates heavy work to GitHub Actions through a set of built-in tools, then pulls results back into `/root/artifacts/`.
 
@@ -46,6 +46,8 @@ All are registered by the platform layer (`Platform.android.kt` / `Platform.jvm.
 ## Bundled workflow
 
 The repo ships `.github/workflows/debug-apk.yml` — a `workflow_dispatch` build that assembles the FOSS debug APK with the default debug/test key and `-Prekai.arm64Only=true`, so the tools above can trigger and download a single arm64-v8a APK (artifact `Re-Kai-debug-arm64`). Passing the property enables an ABI split on `androidApp` that emits only `arm64-v8a` and no universal APK; local builds without the property are unchanged.
+
+The workflow also runs for eligible `vibe/**` pushes. It checks out the event commit, runs desktop unit tests and the Android APK build in parallel, and reports each job separately. Check both conclusions before treating an APK as tested.
 
 ## Key Files
 
