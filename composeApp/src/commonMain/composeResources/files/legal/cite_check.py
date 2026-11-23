@@ -20,6 +20,11 @@ HOST = "https://www.courtlistener.com"
 OPINION_PATH = re.compile(r"/api/rest/v4/opinions/([0-9]+)/")
 PUBLIC_CITATION = re.compile(r"\d{1,8} [A-Za-z0-9. ]{1,30} \d{1,9}")
 QUOTES = re.compile(r'“([^”\n]+)”|"([^"\n]+)"|((?:^>[^\n]+(?:\n|$))+)', re.MULTILINE)
+RECORD_REFERENCES = re.compile(
+    r"\b(?:ECF(?:\s+No\.)?\s*#?\s*\d+(?:-\d+)?(?:\s+at\s+\d+)?|"
+    r"(?:Bates|Ex(?:hibit)?\.?|Tr(?:anscript)?\.?)\s+[A-Z0-9][A-Z0-9-]*(?::\d+(?:[-–]\d+)?)?)\b",
+    re.IGNORECASE,
+)
 TREATMENT = "subsequent treatment not verified"
 TREATMENT_SIGNAL = re.compile(
     r"\b(?:overrul(?:e|ed|ing)|abrogat(?:e|ed|ing)|supersed(?:e|ed|ing)|"
@@ -201,8 +206,9 @@ def parse_citations(text):
     results = []
     for cite in citations:
         start, end = cite.span()
+        full_start, _ = cite.full_span()
         results.append({
-            "start": start, "end": end, "label": text[start:end],
+            "start": start, "full_start": full_start, "end": end, "label": text[start:end],
             "reporter": grouped.get(id(cite)),
             "pin": getattr(cite.metadata, "pin_cite", None),
             "statute": isinstance(cite, FullLawCitation),
@@ -284,6 +290,9 @@ def review(text, client, parse=parse_citations):
         if cite["pin"]:
             issues.append(f"{cite['label']} ({cite['pin']}): pinpoint not independently verified.")
 
+    for record in RECORD_REFERENCES.finditer(text):
+        issues.append(f"{record.group()}: record reference not verified against a source document.")
+
     for number, match in enumerate(QUOTES.finditer(text), 1):
         quote = next(part for part in match.groups() if part is not None)
         quote = re.sub(r"^>\s?", "", quote, flags=re.MULTILINE).strip()
@@ -292,8 +301,11 @@ def review(text, client, parse=parse_citations):
         # Candidates must follow the quote within the citation sentence, not another paragraph.
         paragraph_end = text.find("\n\n", match.end())
         boundary = min(match.end() + 220, paragraph_end if paragraph_end >= 0 else len(text))
-        following = [c for c in citations if match.end() <= c["start"] <= boundary
-                     and not re.search(r'[.!?](?:\s|"|“)+[A-Z]', text[match.end():c["start"]])]
+        following = [
+            c for c in citations if match.end() <= c["start"] <= boundary
+            and not re.search(r'[.!?](?:\s|"|“)+[A-Z]',
+                              text[match.end():max(match.end(), c["full_start"])])
+        ]
         relevant = {c["reporter"] for c in following}
         if len(relevant) != 1 or None in relevant:
             issues.append(f"Quote {number}: source attribution unresolved.")
