@@ -62,7 +62,11 @@ internal actual fun openMcpOAuthLoopback(state: String, onCallback: (String) -> 
                         // A closed browser socket must not discard a validated callback.
                     }
                 }
-                callback?.let { onCallback(it); break }
+                val accepted = callback
+                if (accepted != null) {
+                    onCallback(accepted)
+                    break
+                }
             }
         }
     }, "kai-mcp-oauth-loopback").apply { isDaemon = true }.start()

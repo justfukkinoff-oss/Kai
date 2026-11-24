@@ -2,6 +2,8 @@ package com.inspiredandroid.kai.linux
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.HttpTimeout
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
@@ -27,7 +29,13 @@ private const val PACKAGE_TIMEOUT_SECONDS = 900L
  */
 class LinuxInstaller(private val paths: LinuxPaths) {
 
-    private val downloader = RootfsDownloader(HttpClient(OkHttp))
+    private val downloader = RootfsDownloader(HttpClient(OkHttp) {
+        install(HttpTimeout) {
+            connectTimeoutMillis = 12_000
+            socketTimeoutMillis = 45_000
+            requestTimeoutMillis = 240_000
+        }
+    })
 
     /**
      * Installs [distro] into [paths] and returns the marker it wrote. Cancellable
@@ -55,11 +63,11 @@ class LinuxInstaller(private val paths: LinuxPaths) {
         val archive = paths.archiveFile(spec)
         try {
             onStep(InstallStep.Download(0f))
-            downloader.download(spec.rootfsUrls(), archive) { onStep(InstallStep.Download(it)) }
+            val source = downloader.download(spec.rootfsSources(), archive) { onStep(InstallStep.Download(it)) }
 
             currentCoroutineContext().ensureActive()
             onStep(InstallStep.Extract)
-            TarExtractor.extract(archive, paths.rootfsDir)
+            TarExtractor.extract(archive, paths.rootfsDir, source.prefix)
         } finally {
             archive.delete()
         }
@@ -71,9 +79,12 @@ class LinuxInstaller(private val paths: LinuxPaths) {
 
         val launcher = launcherFor(spec)
         try {
-            refreshPackageIndex(spec, launcher)
-            currentCoroutineContext().ensureActive()
-            installBasePackages(distro, launcher, onStep)
+            if (spec is AlpineSpec) installAlpinePackages(spec, launcher, onStep)
+            else {
+                refreshPackageIndex(spec, launcher)
+                currentCoroutineContext().ensureActive()
+                installBasePackages(distro, launcher, onStep)
+            }
         } catch (e: Throwable) {
             // A rootfs without its base packages would skip the download on the
             // next attempt and keep failing the same way.
@@ -101,27 +112,29 @@ class LinuxInstaller(private val paths: LinuxPaths) {
     )
 
     /**
-     * Alpine's mirrors go down independently of the one that served the rootfs,
-     * so `apk update` walks the list rewriting `repositories` until one answers.
-     * Debian has a single index to refresh.
+     * Alpine's package download can fail after a successful index request.
+     * Retry the transaction on the next mirror, not just the index refresh.
      */
     private suspend fun refreshPackageIndex(spec: DistroSpec, launcher: ProotLauncher) {
         val updateCommand = spec.distro.packageManager.updateCommand
-        if (spec !is AlpineSpec) {
-            val result = launcher.execute(updateCommand, timeoutSeconds = UPDATE_TIMEOUT_SECONDS)
-            check(result.success) { "`$updateCommand` failed: ${result.failureDetail()}" }
-            return
-        }
-        var lastDetail = ""
+        val result = runInterruptible { launcher.execute(updateCommand, timeoutSeconds = UPDATE_TIMEOUT_SECONDS) }
+        check(result.success) { "`$updateCommand` failed: ${result.failureDetail()}" }
+    }
+
+    private suspend fun installAlpinePackages(spec: AlpineSpec, launcher: ProotLauncher, onStep: (InstallStep) -> Unit) {
+        val failures = mutableListOf<String>()
+        val packages = spec.distro.basePackages
+        onStep(InstallStep.Packages(packages))
         for (mirror in spec.mirrors) {
             currentCoroutineContext().ensureActive()
             spec.writeRepositories(paths.rootfsDir, mirror)
-            val result = launcher.execute(updateCommand, timeoutSeconds = 60)
+            // `add --no-cache` already fetches the indexes; a separate update doubles the fetches.
+            val command = spec.distro.packageManager.installCommand(packages).replaceFirst("apk ", "apk --timeout 12 --no-progress ")
+            val result = runInterruptible { launcher.execute(command, timeoutSeconds = 50) }
             if (result.success) return
-            lastDetail = result.failureDetail()
+            failures += "${java.net.URI.create(mirror).host}: ${result.failureDetail(260).lineSequence().lastOrNull()}"
         }
-        val suffix = if (lastDetail.isNotEmpty()) ": $lastDetail" else ""
-        error("`$updateCommand` failed on all Alpine mirrors$suffix")
+        error("Alpine bootstrap could not install ${packages.joinToString()}: ${failures.joinToString("; ")}")
     }
 
     private suspend fun installBasePackages(
@@ -130,26 +143,13 @@ class LinuxInstaller(private val paths: LinuxPaths) {
         onStep: (InstallStep) -> Unit,
     ) {
         val manager = distro.packageManager
-        if (distro == LinuxDistro.ALPINE) {
-            // apk resolves one package per call, which also gives per-package progress.
-            for (pkg in distro.basePackages) {
-                currentCoroutineContext().ensureActive()
-                onStep(InstallStep.Packages(listOf(pkg)))
-                val result = launcher.execute(
-                    manager.installCommand(pkg),
-                    timeoutSeconds = PACKAGE_TIMEOUT_SECONDS,
-                )
-                check(result.success) { "Failed to install $pkg: ${result.failureDetail(200)}" }
-            }
-            return
-        }
         // apt resolves the whole set at once, which is both faster and the only
         // way its dependency solver sees the full picture.
         onStep(InstallStep.Packages(distro.basePackages))
-        val result = launcher.execute(
+        val result = runInterruptible { launcher.execute(
             manager.installCommand(distro.basePackages),
             timeoutSeconds = PACKAGE_TIMEOUT_SECONDS,
-        )
+        ) }
         check(result.success) { "Failed to install base packages: ${result.failureDetail()}" }
     }
 

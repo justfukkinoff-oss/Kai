@@ -28,11 +28,11 @@ private const val TAR_TYPE_REGULAR_LEGACY: Byte = 0
 object TarExtractor {
 
     /** Picks the decompressor from [archive]'s extension. */
-    fun extract(archive: File, targetDir: File) {
+    fun extract(archive: File, targetDir: File, prefix: String = "") {
         targetDir.mkdirs()
         val raw = BufferedInputStream(FileInputStream(archive))
         val stream = if (archive.name.endsWith(".xz")) XZInputStream(raw) else GZIPInputStream(raw)
-        stream.use { extractTar(it, targetDir) }
+        stream.use { extractTar(it, targetDir, prefix) }
     }
 
     fun makeWritable(rootfsDir: File) {
@@ -89,7 +89,7 @@ object TarExtractor {
         file.writeText(content)
     }
 
-    private fun extractTar(inputStream: InputStream, targetDir: File) {
+    private fun extractTar(inputStream: InputStream, targetDir: File, prefix: String) {
         val headerBuffer = ByteArray(TAR_BLOCK_SIZE)
         val dataBuffer = ByteArray(BUFFER_SIZE)
         val targetCanonical = targetDir.canonicalPath
@@ -113,8 +113,13 @@ object TarExtractor {
             val type = typeFlag.toInt().toChar()
             val linkName = readTarString(headerBuffer, TAR_LINK_OFFSET, 100)
 
-            val outFile = File(targetDir, fullName)
-            if (!outFile.canonicalPath.startsWith(targetCanonical)) {
+            val relative = fullName.removePrefix("./")
+            if (prefix.isNotEmpty() && !relative.startsWith("$prefix/")) {
+                skipBytes(inputStream, alignToBlock(size))
+                continue
+            }
+            val outFile = File(targetDir, if (prefix.isEmpty()) relative else relative.removePrefix("$prefix/"))
+            if (outFile.canonicalPath != targetCanonical && !outFile.canonicalPath.startsWith("$targetCanonical${File.separator}")) {
                 skipBytes(inputStream, alignToBlock(size))
                 continue
             }
@@ -155,9 +160,10 @@ object TarExtractor {
                 }
 
                 '1' -> {
-                    val linkTarget = File(targetDir, linkName)
+                    val relativeLink = linkName.removePrefix("./").let { if (prefix.isNotEmpty()) it.removePrefix("$prefix/") else it }
+                    val linkTarget = File(targetDir, relativeLink)
                     outFile.parentFile?.mkdirs()
-                    if (linkTarget.exists()) {
+                    if (linkTarget.canonicalPath.startsWith("$targetCanonical${File.separator}") && linkTarget.isFile) {
                         linkTarget.copyTo(outFile, overwrite = true)
                     }
                 }

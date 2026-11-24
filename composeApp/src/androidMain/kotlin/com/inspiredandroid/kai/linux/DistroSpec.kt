@@ -2,7 +2,6 @@ package com.inspiredandroid.kai.linux
 
 import android.os.Build
 import java.io.File
-import java.io.IOException
 import java.net.URL
 
 // Cap at 3.22: Alpine 3.23+ ships apk-tools 3, which uses execveat() in a way
@@ -23,6 +22,9 @@ private val ALPINE_MIRRORS = listOf(
 private const val LXC_INDEX = "https://images.linuxcontainers.org/meta/1.0/index-user"
 private const val LXC_BASE = "https://images.linuxcontainers.org"
 private const val DEBIAN_RELEASE = "bookworm"
+private const val TERMUX_DEBIAN_RELEASE = "v4.7.0"
+
+data class RootfsSource(val url: String, val prefix: String = "", val sha256: String? = null)
 
 /**
  * The per-distribution facts the shared installer and proot launcher need:
@@ -43,7 +45,7 @@ sealed interface DistroSpec {
      * Candidate download URLs, best first. May hit the network to resolve an
      * index, so call it off the main thread.
      */
-    fun rootfsUrls(): List<String>
+    fun rootfsSources(): List<RootfsSource>
 
     /** Post-extraction fixes that must land before the first proot run. */
     fun configure(rootfsDir: File)
@@ -79,10 +81,10 @@ object AlpineSpec : DistroSpec {
         }
     }
 
-    override fun rootfsUrls(): List<String> {
+    override fun rootfsSources(): List<RootfsSource> {
         val arch = arch()
         return ALPINE_MIRRORS.map { base ->
-            "$base/$ALPINE_BRANCH/releases/$arch/alpine-minirootfs-$ALPINE_VERSION-$arch.tar.gz"
+            RootfsSource("$base/$ALPINE_BRANCH/releases/$arch/alpine-minirootfs-$ALPINE_VERSION-$arch.tar.gz")
         }
     }
 
@@ -129,16 +131,33 @@ object DebianSpec : DistroSpec {
      * Newest default image for this device's architecture, e.g.
      * `debian;bookworm;arm64;default;20260731_05:24;/images/debian/bookworm/arm64/default/20260731_05:24/`.
      */
-    override fun rootfsUrls(): List<String> {
+    override fun rootfsSources(): List<RootfsSource> {
         val arch = arch()
-        val index = URL(LXC_INDEX).openStream().bufferedReader().use { it.readText() }
-        val line = index.lineSequence()
-            .filter { it.startsWith("debian;$DEBIAN_RELEASE;$arch;default;") }
-            .maxOrNull()
-            ?: throw IOException("No Debian $DEBIAN_RELEASE image for $arch in LXC index")
-        val path = line.split(';').getOrNull(5)?.trim()?.takeIf { it.isNotEmpty() }
-            ?: throw IOException("Malformed LXC index line: $line")
-        return listOf(LXC_BASE + path.removeSuffix("/") + "/rootfs.tar.xz")
+        val lxc = runCatching {
+            val connection = URL(LXC_INDEX).openConnection().apply {
+                connectTimeout = 8000
+                readTimeout = 8000
+            }
+            connection.getInputStream().bufferedReader().useLines { lines ->
+                val pattern = Regex("/images/debian/$DEBIAN_RELEASE/$arch/default/\\d{8}_\\d{2}:\\d{2}/?")
+                lines.filter { it.startsWith("debian;$DEBIAN_RELEASE;$arch;default;") }
+                    .mapNotNull { it.split(';').getOrNull(5)?.trim()?.takeIf(pattern::matches) }
+                    .distinct().sortedDescending().take(2)
+                    .map { RootfsSource("$LXC_BASE${it.trimEnd('/')}/rootfs.tar.xz") }.toList()
+            }
+        }.getOrDefault(emptyList())
+        // The Termux project publishes a PRoot-compatible Bookworm rootfs independently of LXC.
+        val (abi, sha) = when (arch) {
+            "armhf" -> "arm" to "0eba2cb93261d6e73c2f3c32ed7ebe9de408ceef584c5e0c0b7e237d294f7a8d"
+            "i386" -> "i686" to "7425f5fe7f34c718428f235b9155adb782c29ce6347f704f4a93a9da195b9aa3"
+            "amd64" -> "x86_64" to "164932ab77a0b94a8e355c9b68158a5b76d5abef89ada509488c44ff54655d61"
+            else -> "aarch64" to "4baa32280cc70b67e2c650777c1d974349f0cdf23afaabc305ad3bc6182b8df8"
+        }
+        val prefix = "debian-$DEBIAN_RELEASE-$abi"
+        return lxc + RootfsSource(
+            "https://github.com/termux/proot-distro/releases/download/$TERMUX_DEBIAN_RELEASE/$prefix-pd-$TERMUX_DEBIAN_RELEASE.tar.xz",
+            prefix, sha,
+        )
     }
 
     override fun configure(rootfsDir: File) {
