@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -39,6 +40,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.inspiredandroid.kai.data.HeartbeatLogEntry
+import com.inspiredandroid.kai.data.AppSettings
+import com.inspiredandroid.kai.data.PromptProfile
+import com.inspiredandroid.kai.data.promptProfile
+import com.inspiredandroid.kai.data.promptText
+import com.inspiredandroid.kai.data.savePrompt
+import com.inspiredandroid.kai.data.setPromptProfile
 import com.inspiredandroid.kai.data.MemoryEntry
 import com.inspiredandroid.kai.data.ScheduledTask
 import com.inspiredandroid.kai.data.TaskTrigger
@@ -47,7 +54,6 @@ import com.inspiredandroid.kai.ui.components.SettingsListItem
 import com.inspiredandroid.kai.ui.handCursor
 import com.inspiredandroid.kai.ui.icons.Replay
 import kai.composeapp.generated.resources.Res
-import kai.composeapp.generated.resources.default_soul
 import kai.composeapp.generated.resources.execution_log_status_fail
 import kai.composeapp.generated.resources.execution_log_status_ok
 import kai.composeapp.generated.resources.settings_heartbeat_recent
@@ -85,6 +91,7 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.offsetAt
 import kotlinx.datetime.toLocalDateTime
 import org.jetbrains.compose.resources.stringResource
+import org.koin.compose.koinInject
 import kotlin.time.Instant
 
 @Composable
@@ -92,10 +99,7 @@ internal fun AgentContent(uiState: SettingsUiState, actions: SettingsActions) {
     StaggeredSettingsColumns(
         start = {
             SettingsCard {
-                SoulEditor(
-                    soulText = uiState.soulText,
-                    onSaveSoul = actions.onSaveSoul,
-                )
+                PromptProfileEditor(uiState.soulText, actions.onSaveSoul)
             }
             SettingsCard {
                 ScheduledTaskList(
@@ -188,15 +192,46 @@ internal fun AgentContent(uiState: SettingsUiState, actions: SettingsActions) {
 }
 
 @Composable
-private fun SoulEditor(
+private fun PromptProfileEditor(
     soulText: String,
     onSaveSoul: (String) -> Unit,
 ) {
-    val localizedDefault = stringResource(Res.string.default_soul)
-    val displayText = soulText.ifEmpty { localizedDefault }
+    val settings: AppSettings = koinInject()
+    var active by remember { mutableStateOf(settings.promptProfile(settings.getCurrentConversationId())) }
+    var selected by remember { mutableStateOf(active) }
+    var revision by remember { mutableStateOf(0) }
+    val profile = selected
+    val saved = remember(profile, revision, soulText) { settings.promptText(profile) }
+    Text("System prompt profiles", style = MaterialTheme.typography.titleMedium)
+    Text("Edit the actual prompt for each profile. Choose which profile this chat uses. Kai still appends tool and conversation context.")
+    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        for (item in PromptProfile.entries) FilterChip(
+            selected = item == profile, onClick = { selected = item }, label = { Text(item.label) },
+        )
+    }
+    Text("Current chat uses: ${active.label}", style = MaterialTheme.typography.bodySmall)
+    if (active != profile) TextButton(onClick = {
+        settings.setPromptProfile(profile)
+        active = profile
+    }) { Text("Use ${profile.label} in this chat") }
+    androidx.compose.runtime.key(profile) {
+        SoulEditor(saved, profile.starter) {
+            if (profile == PromptProfile.DEFAULT) onSaveSoul(it) else settings.savePrompt(profile, it)
+            revision++
+        }
+    }
+}
+
+@Composable
+private fun SoulEditor(
+    soulText: String,
+    baseline: String,
+    onSaveSoul: (String) -> Unit,
+) {
+    val displayText = soulText.ifEmpty { baseline }
     var editedText by remember(displayText) { mutableStateOf(displayText) }
     val hasChanges = editedText != displayText
-    val maxChars = 4000
+    val maxChars = 16000
 
     var showResetDialog by remember { mutableStateOf(false) }
 
@@ -206,12 +241,12 @@ private fun SoulEditor(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = stringResource(Res.string.settings_soul),
+                text = "Prompt text",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.weight(1f),
             )
-            if (soulText.isNotEmpty()) {
+            if (soulText != baseline) {
                 IconButton(
                     onClick = { showResetDialog = true },
                     modifier = Modifier.handCursor(),
@@ -225,7 +260,7 @@ private fun SoulEditor(
             }
         }
         Text(
-            text = stringResource(Res.string.settings_soul_description),
+            text = "Save prompt edits to apply them to chats using this profile.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -239,7 +274,7 @@ private fun SoulEditor(
             maxLines = 8,
             label = {
                 Text(
-                    stringResource(Res.string.settings_soul),
+                    "System prompt",
                     color = MaterialTheme.colorScheme.onBackground,
                 )
             },
@@ -274,7 +309,7 @@ private fun SoulEditor(
                     onClick = {
                         showResetDialog = false
                         onSaveSoul("")
-                        editedText = localizedDefault
+                        editedText = baseline
                     },
                     modifier = Modifier.handCursor(),
                 ) {

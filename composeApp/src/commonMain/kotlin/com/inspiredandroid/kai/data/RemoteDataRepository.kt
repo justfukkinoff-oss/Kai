@@ -1863,10 +1863,8 @@ class RemoteDataRepository(
     }
 
     override suspend fun getActiveSystemPrompt(variant: SystemPromptVariant): String? {
-        // Hard-coded app prompt: Re-Kai is a specific engineering agent, and the shipped
-        // default prompt documents its fixed surfaces (workspace, uploads, Actions
-        // pipeline, APK rework). A user-customized Soul still wins over it.
-        val soul = appSettings.getSoulText().ifEmpty { HARDCODED_REKAI_PROMPT }
+        val chatId = activeConversationId()
+        val soul = appSettings.promptText(appSettings.promptProfile(chatId))
         val memoryEnabled = appSettings.isMemoryEnabled()
         val schedulingEnabled = appSettings.isSchedulingEnabled()
 
@@ -1945,8 +1943,7 @@ class RemoteDataRepository(
 
         val activeSkill = pendingActiveSkillId?.let { skillManager.getSkill(it) }
 
-        val currentConversationId = _currentConversationId.value
-        val activeObjective = currentConversationId?.let { objectiveStore.get(it) }
+        val activeObjective = chatId?.let { objectiveStore.get(it) }
 
         return buildChatSystemPrompt(
             variant = variant,
@@ -2329,7 +2326,9 @@ class RemoteDataRepository(
                         launch { localHistory.collect { notify(it) } }
                     }
                     try {
-                        val turn = askWithService(service, messages, OBJECTIVE_RECOVERY_SYSTEM_PROMPT, selectedInstance.instanceId, localHistory)
+                        val role = appSettings.promptProfile(id)
+                        val recoveryPrompt = "$OBJECTIVE_RECOVERY_SYSTEM_PROMPT\n\n## Assistant profile\n${appSettings.promptText(role)}"
+                        val turn = askWithService(service, messages, recoveryPrompt, selectedInstance.instanceId, localHistory)
                         onActivity?.invoke(localHistory.value + History(
                             role = History.Role.ASSISTANT,
                             content = "",
@@ -2346,7 +2345,6 @@ class RemoteDataRepository(
                 }
             }
         }
-        val systemPrompt = getActiveSystemPrompt()
         // Use a local history to avoid polluting the current conversation's chatHistory
         // When a conversation override is set (heartbeat / scheduled tasks), bind any
         // tool calls in this run to that conversation's sandbox session via the
@@ -2355,10 +2353,10 @@ class RemoteDataRepository(
         // that chat's persistent bash session.
         return if (conversationIdOverride != null) {
             withContext(ConversationIdElement(conversationIdOverride)) {
-                askWithService(service, messages, systemPrompt, selectedInstance.instanceId, localHistory).content
+                askWithService(service, messages, getActiveSystemPrompt(), selectedInstance.instanceId, localHistory).content
             }
         } else {
-            askWithService(service, messages, systemPrompt, selectedInstance.instanceId, localHistory).content
+            askWithService(service, messages, getActiveSystemPrompt(), selectedInstance.instanceId, localHistory).content
         }
     }
 
