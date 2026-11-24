@@ -81,7 +81,7 @@ internal class McpOAuth(private val settings: AppSettings) {
         val host = if (':' in url.host && !url.host.startsWith("[")) "[${url.host}]" else url.host
         return "https://$host" + if (url.port == 443) "" else ":${url.port}"
     }
-    private fun path(raw: String): String = raw.substringAfter("://").substringAfter('/', "").substringBefore('?').trimEnd('/').let {
+    private fun path(raw: String): String = raw.substringAfter("://").substringBefore('?').substringAfter('/', "").trimEnd('/').let {
         if (it.isBlank()) "" else "/$it"
     }
 

@@ -34,9 +34,9 @@ import androidx.compose.foundation.layout.Box
 import com.inspiredandroid.kai.tools.LegalLibrary
 import com.inspiredandroid.kai.tools.LibraryRoute
 import io.github.vinceglb.filekit.dialogs.FileKitType
+import io.github.vinceglb.filekit.dialogs.FileKitMode
 import io.github.vinceglb.filekit.dialogs.compose.rememberFilePickerLauncher
 import io.github.vinceglb.filekit.name
-import io.github.vinceglb.filekit.readBytes
 import io.github.vinceglb.filekit.size
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -115,23 +115,33 @@ private fun LegalLibraryControls(onManageSandbox: () -> Unit) {
         matters = response.rows("matters")
         message = response.field("error").ifEmpty { "${matters.size} matters." }
     }
-    val picker = rememberFilePickerLauncher(type = FileKitType.File(extensions = listOf(
-        "pdf", "docx", "pptx", "epub", "txt", "md", "csv", "json", "xml", "kt", "java", "py", "js", "ts", "rs", "go", "jpg", "jpeg", "png", "webp", "tif", "tiff",
-    ))) { file ->
-        if (file != null && target.isNotBlank()) work("Reading ${file.name}…") {
-            if (file.size() > 80_000_000) {
-                message = "Choose a file of at most 80 MB."
-            } else {
-                val result = LegalLibrary.call("ingest", target,
-                    mapOf("doc_type" to JsonPrimitive(documentType.trim()), "court" to JsonPrimitive(court.trim()),
-                        "docket" to JsonPrimitive(docket.trim()), "date" to JsonPrimitive(date.trim()), "photo" to JsonPrimitive(photo),
-                        "force_ocr" to JsonPrimitive(forceOcr)),
-                    file.name, file.readBytes(), { message = it })
-                refreshDocuments(target)
-                message = result.field("error").ifEmpty {
-                    "${result.field("title")}: ${result.field("status")}. Pages needing OCR: ${result["needs_ocr"] ?: "not reported"}"
+    val picker = rememberFilePickerLauncher(
+        mode = FileKitMode.Multiple(maxItems = 10),
+        type = FileKitType.File(extensions = listOf(
+            "pdf", "docx", "pptx", "epub", "txt", "md", "csv", "json", "xml", "kt", "java", "py", "js", "ts", "rs", "go", "jpg", "jpeg", "png", "webp", "tif", "tiff",
+        )),
+    ) { files ->
+        if (!files.isNullOrEmpty() && target.isNotBlank()) work("Preparing ${files.size} files…") {
+            val results = mutableListOf<String>()
+            for ((index, file) in files.withIndex()) {
+                val label = "${index + 1}/${files.size} ${file.name}"
+                message = "$label: copying to the sandbox…"
+                if (file.size() > 80_000_000) {
+                    results.add("${file.name}: exceeds the 80 MB limit.")
+                } else {
+                    val result = LegalLibrary.call("ingest", target,
+                        mapOf("doc_type" to JsonPrimitive(documentType.trim()), "court" to JsonPrimitive(court.trim()),
+                            "docket" to JsonPrimitive(docket.trim()), "date" to JsonPrimitive(date.trim()), "photo" to JsonPrimitive(photo),
+                            "force_ocr" to JsonPrimitive(forceOcr)),
+                        upload = file, onProgress = { message = "$label: $it" })
+                    val error = result.field("error")
+                    val missing = (result["needs_ocr"] as? JsonArray)?.size ?: 0
+                    results.add(if (error.isNotBlank()) "${file.name}: $error" else
+                        "${file.name}: ${result.field("status")}${if (missing > 0) " ($missing pages need OCR)" else ""}.")
                 }
             }
+            refreshDocuments(target)
+            message = results.joinToString("\n")
         }
     }
 
@@ -159,7 +169,7 @@ private fun LegalLibraryControls(onManageSandbox: () -> Unit) {
     if (panel == "Setup") {
         SettingsCard(Modifier.fillMaxWidth()) {
             Text("Set up the library", style = MaterialTheme.typography.titleMedium)
-            Text("Start Linux Sandbox, then install the library tools below. Next, choose a matter in Files and tap Add files. No provider is needed for local OCR or keyword search.")
+            Text("Start Linux Sandbox, then install the library tools below. Next, choose a matter in Files and tap Add files. You can select up to 10 files at a time. No provider is needed for local OCR or keyword search.")
             TextButton(onClick = onManageSandbox) { Text("Open Linux Sandbox settings") }
             Button(enabled = sandboxState.ready && !running, onClick = {
                 work("Installing sandbox packages…") {

@@ -11,6 +11,8 @@ import com.inspiredandroid.kai.mcp.McpServerManager
 import com.inspiredandroid.kai.network.tools.ParameterSchema
 import com.inspiredandroid.kai.network.tools.Tool
 import com.inspiredandroid.kai.network.tools.ToolSchema
+import io.github.vinceglb.filekit.PlatformFile
+import io.github.vinceglb.filekit.name
 import kai.composeapp.generated.resources.Res
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -76,8 +78,7 @@ internal object LegalLibrary : KoinComponent {
         action: String,
         scope: String = "",
         args: Map<String, JsonElement> = emptyMap(),
-        uploadTitle: String? = null,
-        upload: ByteArray? = null,
+        upload: PlatformFile? = null,
         onProgress: (String) -> Unit = {},
     ): JsonObject {
         if (!sandbox.status.value.ready) return issue("Start the existing Linux sandbox first.")
@@ -85,6 +86,13 @@ internal object LegalLibrary : KoinComponent {
         val folder = "/root/.kai/library/requests/$id"
         val session = "library-$id"
         var handle: CommandHandle? = null
+        try {
+        if (!sandbox.writeBinaryFile("$folder/library.py", Res.readBytes("files/legal/library.py"))) return issue("Could not stage library worker.")
+        if (action == "export" && !sandbox.writeBinaryFile("$folder/filing.py", Res.readBytes("files/legal/filing.py"))) return issue("Could not stage filing formatter.")
+        val uploadedPath = if (upload != null) {
+            if (!sandbox.writeBinaryFile("$folder/input/.keep", byteArrayOf())) return issue("Could not prepare library storage.")
+            sandbox.importFile("$folder/input", upload).getOrNull() ?: return issue("Could not copy the selected file.")
+        } else null
         val payload = buildJsonObject {
             args.forEach { (key, value) -> put(key, value) }
             put("action", action)
@@ -103,19 +111,11 @@ internal object LegalLibrary : KoinComponent {
                     }
                 }
             })
-            if (upload != null && uploadTitle != null) {
-                val ext = uploadTitle.substringAfterLast('.', "").lowercase().takeIf { it.matches(Regex("[a-z0-9]{1,8}")) } ?: "txt"
-                put("title", uploadTitle)
-                put("path", "$folder/upload.$ext")
+            if (upload != null && uploadedPath != null) {
+                put("title", upload.name)
+                put("path", uploadedPath)
             }
         }
-        try {
-            if (!sandbox.writeBinaryFile("$folder/library.py", Res.readBytes("files/legal/library.py"))) return issue("Could not stage library worker.")
-            if (action == "export" && !sandbox.writeBinaryFile("$folder/filing.py", Res.readBytes("files/legal/filing.py"))) return issue("Could not stage filing formatter.")
-            if (upload != null) {
-                val path = (payload["path"] as? JsonPrimitive)?.content ?: return issue("Missing upload name.")
-                if (!sandbox.writeBinaryFile(path, upload)) return issue("Could not copy the upload.")
-            }
             if (!sandbox.writeBinaryFile("$folder/request.json", payload.toString().encodeToByteArray())) return issue("Could not stage library request.")
             val stderr = MutableStateFlow("")
             handle = sandbox.executeCommandStreaming(
