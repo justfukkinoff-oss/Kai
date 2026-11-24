@@ -899,8 +899,13 @@ class SettingsViewModel(
     }
 
     private fun onRefreshMcpServer(serverId: String) {
+        refreshMcpServers()
         viewModelScope.launch(backgroundDispatcher) {
-            connectMcpServerWithStatus(serverId)
+            if (dataRepository.isMcpServerConnected(serverId)) {
+                // OAuth callback has already initialized this connection and discovered its tools.
+                updateMcpConnectionStatus(serverId, McpConnectionStatus.Connected)
+                refreshMcpServers()
+            } else connectMcpServerWithStatus(serverId)
         }
     }
 

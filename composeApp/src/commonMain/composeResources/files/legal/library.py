@@ -168,6 +168,8 @@ def embed(route, values, role):
 
 
 def fingerprint(route):
+    if not any(route.get(key) for key in ("exactUrl", "template", "responsePath")) and route.get("method", "POST") == "POST":
+        return hashlib.sha256((route["url"].rstrip("/") + "\n" + route.get("model", "") + "\n" + route.get("format", "") + "\nraw-v1").encode()).hexdigest()
     fields = ("url", "model", "format", "exactUrl", "method", "template", "responsePath")
     return hashlib.sha256(json.dumps({name: route.get(name, "") for name in fields}, sort_keys=True).encode()).hexdigest()
 

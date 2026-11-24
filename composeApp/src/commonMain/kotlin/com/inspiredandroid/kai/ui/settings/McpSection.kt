@@ -16,12 +16,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -32,6 +35,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -41,9 +46,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.inspiredandroid.kai.mcp.PopularMcpServer
+import com.inspiredandroid.kai.Platform
+import com.inspiredandroid.kai.currentPlatform
+import com.inspiredandroid.kai.mcp.MCP_OAUTH_REDIRECT
+import com.inspiredandroid.kai.mcp.McpException
+import com.inspiredandroid.kai.mcp.McpServerManager
 import com.inspiredandroid.kai.mcp.authorizationHeaderValue
 import com.inspiredandroid.kai.mcp.popularMcpServers
 import com.inspiredandroid.kai.ui.KaiOutlinedTextField
@@ -73,8 +84,10 @@ import kai.composeapp.generated.resources.settings_mcp_status_connecting
 import kai.composeapp.generated.resources.settings_mcp_status_error
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import org.jetbrains.compose.resources.stringResource
 import org.jetbrains.compose.resources.vectorResource
+import org.koin.compose.koinInject
 
 @Composable
 internal fun McpServersSection(
@@ -88,6 +101,11 @@ internal fun McpServersSection(
     onShowAddDialog: (Boolean) -> Unit,
     onAddPopularMcpServer: (PopularMcpServer) -> Unit,
 ) {
+    val manager: McpServerManager = koinInject()
+    val oauthEvent by manager.oauthEvents.collectAsState()
+    LaunchedEffect(oauthEvent) {
+        oauthEvent?.takeIf { it.connected }?.let { onRefreshMcpServer(it.serverId) }
+    }
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
             text = stringResource(Res.string.settings_mcp_servers),
@@ -127,6 +145,7 @@ internal fun McpServersSection(
             onDismiss = { onShowAddDialog(false) },
             onAdd = onAddMcpServer,
             onAddPopular = onAddPopularMcpServer,
+            onServerAvailable = onRefreshMcpServer,
         )
     }
 }
@@ -195,6 +214,8 @@ private fun McpServerCard(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+
+            if (currentPlatform is Platform.Mobile.Android) McpOAuthCardControls(server.id, server.isEnabled)
 
             if (expanded) {
                 Spacer(Modifier.height(12.dp))
@@ -271,6 +292,59 @@ private fun McpServerCard(
     }
 }
 
+@Composable
+private fun McpOAuthCardControls(serverId: String, enabled: Boolean) {
+    val manager: McpServerManager = koinInject()
+    val event by manager.oauthEvents.collectAsState()
+    val uriHandler = LocalUriHandler.current
+    val coroutine = rememberCoroutineScope()
+    var show by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var clientId by remember { mutableStateOf("") }
+    var scopes by remember { mutableStateOf("") }
+    var note by remember(event) { mutableStateOf("") }
+    val hasSession = manager.hasOAuth(serverId)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextButton(enabled = enabled && !busy, onClick = { show = !show }) {
+            Text(if (show) "Hide OAuth settings" else if (hasSession) "Reconnect OAuth" else "Sign in with OAuth")
+        }
+        if (hasSession) TextButton(onClick = { manager.forgetOAuth(serverId) }) { Text("Sign out") }
+    }
+    if (show) {
+        OAuthFields(clientId, { clientId = it }, scopes, { scopes = it })
+        Button(enabled = !busy, onClick = {
+            busy = true
+            note = "Discovering OAuth settings…"
+            coroutine.launch {
+                try {
+                    uriHandler.openUri(manager.beginOAuth(serverId, clientId, scopes))
+                    note = "Complete sign-in in your browser and return to Kai."
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: McpException) {
+                    note = e.message ?: "Could not start OAuth sign-in."
+                } catch (_: Exception) {
+                    note = "Could not open OAuth sign-in."
+                } finally {
+                    busy = false
+                }
+            }
+        }) { Text("Open browser to sign in") }
+    }
+    val status = note.ifBlank { event?.takeIf { it.serverId == serverId }?.message.orEmpty() }
+    if (status.isNotBlank()) Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+@Composable
+private fun OAuthFields(clientId: String, onClientId: (String) -> Unit, scopes: String, onScopes: (String) -> Unit) {
+    Text("Uses OAuth discovery and PKCE. Leave Client ID blank if the provider supports automatic registration. Otherwise use a public client registered with this callback:")
+    SelectionContainer { Text(MCP_OAUTH_REDIRECT, style = MaterialTheme.typography.bodySmall) }
+    KaiOutlinedTextField(clientId, onClientId, modifier = Modifier.fillMaxWidth(),
+        label = { Text("Public client ID or client metadata URL") }, singleLine = true)
+    KaiOutlinedTextField(scopes, onScopes, modifier = Modifier.fillMaxWidth(),
+        label = { Text("Scopes (optional, space-separated)") }, singleLine = true)
+}
+
 private data class HeaderEntry(val key: String = "Authorization", val value: String = "")
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -279,6 +353,7 @@ private fun AddMcpServerDialog(
     onDismiss: () -> Unit,
     onAdd: (String, String, Map<String, String>) -> Unit,
     onAddPopular: (PopularMcpServer) -> Unit,
+    onServerAvailable: (String) -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
@@ -288,11 +363,20 @@ private fun AddMcpServerDialog(
     var apiKey by remember { mutableStateOf("") }
     val mcpScrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
+    val uriHandler = LocalUriHandler.current
+    val manager: McpServerManager = koinInject()
+    var oauthMode by remember { mutableStateOf(false) }
+    var oauthClientId by remember { mutableStateOf("") }
+    var oauthScopes by remember { mutableStateOf("") }
+    var oauthBusy by remember { mutableStateOf(false) }
+    var oauthMessage by remember { mutableStateOf("") }
+    var oauthServerId by remember { mutableStateOf<String?>(null) }
 
     fun prefillPopularWithAuth(server: PopularMcpServer) {
         name = server.name
         url = server.url
         requiresAuth = true
+        oauthMode = false
         apiKey = ""
         headers.clear()
         headers.add(HeaderEntry(key = "Authorization", value = ""))
@@ -333,7 +417,16 @@ private fun AddMcpServerDialog(
                 )
                 Spacer(Modifier.height(12.dp))
 
-                if (requiresAuth) {
+                if (currentPlatform is Platform.Mobile.Android) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = !oauthMode, onClick = { oauthMode = false }, label = { Text("Headers or no auth") })
+                        FilterChip(selected = oauthMode, onClick = { oauthMode = true }, label = { Text("OAuth") })
+                    }
+                }
+                if (oauthMode) {
+                    OAuthFields(oauthClientId, { oauthClientId = it }, oauthScopes, { oauthScopes = it })
+                    if (oauthMessage.isNotBlank()) Text(oauthMessage, style = MaterialTheme.typography.bodySmall)
+                } else if (requiresAuth) {
                     KaiOutlinedTextField(
                         value = apiKey,
                         onValueChange = { apiKey = it },
@@ -427,14 +520,42 @@ private fun AddMcpServerDialog(
                                     put("Authorization", authorizationHeaderValue(apiKey))
                                 }
                             }
-                            onAdd(name, url, headerMap)
+                            if (oauthMode) {
+                                val endpoint = url.trim()
+                                if (!endpoint.startsWith("https://", ignoreCase = true)) {
+                                    oauthMessage = "Enter an HTTPS MCP endpoint."
+                                    return@TextButton
+                                }
+                                oauthBusy = true
+                                oauthMessage = "Discovering OAuth settings…"
+                                scope.launch {
+                                    try {
+                                        val prior = manager.getServers().firstOrNull { it.id == oauthServerId && it.url == endpoint }
+                                        val entry = prior ?: manager.addServer(name.trim(), endpoint, emptyMap())
+                                        oauthServerId = entry.id
+                                        uriHandler.openUri(manager.beginOAuth(entry.id, oauthClientId, oauthScopes))
+                                        onServerAvailable(entry.id)
+                                        onDismiss()
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: McpException) {
+                                        oauthMessage = e.message ?: "Could not start OAuth sign-in."
+                                        oauthServerId?.let(onServerAvailable)
+                                    } catch (_: Exception) {
+                                        oauthMessage = "Could not open OAuth sign-in."
+                                        oauthServerId?.let(onServerAvailable)
+                                    } finally {
+                                        oauthBusy = false
+                                    }
+                                }
+                            } else onAdd(name, url, headerMap)
                         },
                         // Auth-required popular servers (e.g. Jina) can still be added without a
                         // key — some tools work unauthenticated; search needs a key later.
-                        enabled = name.isNotBlank() && url.isNotBlank(),
+                        enabled = name.isNotBlank() && url.isNotBlank() && !oauthBusy,
                         modifier = Modifier.handCursor(),
                     ) {
-                        Text(stringResource(Res.string.settings_mcp_add))
+                        Text(if (oauthMode) "Add and sign in" else stringResource(Res.string.settings_mcp_add))
                     }
                 }
 
