@@ -156,19 +156,25 @@ class ProotLauncher(
         val stderr = CompletableFuture.supplyAsync {
             readBounded(process.errorStream.bufferedReader(), maxOutputChars)
         }
-        if (process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+        val finished = try {
+            process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+        } catch (e: InterruptedException) {
+            process.destroyForcibly()
+            throw e
+        }
+        if (finished) {
             ProotResult(
                 success = process.exitValue() == 0,
-                stdout = stdout.get().smartTruncate(maxOutputChars),
-                stderr = stderr.get().smartTruncate(maxOutputChars),
+                stdout = stdout.get(2, TimeUnit.SECONDS).smartTruncate(maxOutputChars),
+                stderr = stderr.get(2, TimeUnit.SECONDS).smartTruncate(maxOutputChars),
                 exitCode = process.exitValue(),
             )
         } else {
             process.destroyForcibly()
             ProotResult(
                 success = false,
-                stdout = stdout.get(1, TimeUnit.SECONDS).smartTruncate(maxOutputChars),
-                stderr = stderr.get(1, TimeUnit.SECONDS).smartTruncate(maxOutputChars),
+                stdout = stdout.getNow("").smartTruncate(maxOutputChars),
+                stderr = stderr.getNow("").smartTruncate(maxOutputChars),
                 timedOut = true,
                 error = "Timed out after ${timeoutSeconds}s",
             )

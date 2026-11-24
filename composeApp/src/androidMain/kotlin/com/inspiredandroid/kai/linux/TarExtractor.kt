@@ -49,7 +49,7 @@ object TarExtractor {
      * through that symlink throws ENOENT — delete the link first, then write a
      * plain file with public resolvers.
      */
-    fun writeResolvConf(rootfsDir: File) {
+    fun writeResolvConf(rootfsDir: File, dnsServers: List<String> = emptyList()) {
         val etcDir = File(rootfsDir, "etc")
         etcDir.mkdirs()
         // systemd-resolved stub target (and similar) need a /run tree for some tools
@@ -57,7 +57,8 @@ object TarExtractor {
         File(rootfsDir, "run/systemd/resolve").mkdirs()
         replaceWithRegularFile(
             File(etcDir, "resolv.conf"),
-            "nameserver 8.8.8.8\nnameserver 8.8.4.4\n",
+            (dnsServers + listOf("1.1.1.1", "8.8.8.8")).distinct().take(3)
+                .joinToString(separator = "\n", postfix = "\n") { "nameserver $it" },
         )
         // Quiet hostname resolution noise inside the sandbox
         val hosts = File(etcDir, "hosts")

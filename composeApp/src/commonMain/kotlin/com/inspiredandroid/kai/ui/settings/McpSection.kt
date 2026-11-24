@@ -53,6 +53,7 @@ import com.inspiredandroid.kai.mcp.PopularMcpServer
 import com.inspiredandroid.kai.Platform
 import com.inspiredandroid.kai.currentPlatform
 import com.inspiredandroid.kai.mcp.MCP_OAUTH_REDIRECT
+import com.inspiredandroid.kai.mcp.REVISE_MCP_URL
 import com.inspiredandroid.kai.mcp.McpException
 import com.inspiredandroid.kai.mcp.McpServerManager
 import com.inspiredandroid.kai.mcp.authorizationHeaderValue
@@ -215,7 +216,7 @@ private fun McpServerCard(
                 )
             }
 
-            if (currentPlatform is Platform.Mobile.Android) McpOAuthCardControls(server.id, server.isEnabled)
+            if (currentPlatform is Platform.Mobile.Android) McpOAuthCardControls(server.id, server.url, server.isEnabled)
 
             if (expanded) {
                 Spacer(Modifier.height(12.dp))
@@ -293,7 +294,7 @@ private fun McpServerCard(
 }
 
 @Composable
-private fun McpOAuthCardControls(serverId: String, enabled: Boolean) {
+private fun McpOAuthCardControls(serverId: String, url: String, enabled: Boolean) {
     val manager: McpServerManager = koinInject()
     val event by manager.oauthEvents.collectAsState()
     val uriHandler = LocalUriHandler.current
@@ -311,7 +312,7 @@ private fun McpOAuthCardControls(serverId: String, enabled: Boolean) {
         if (hasSession) TextButton(onClick = { manager.forgetOAuth(serverId) }) { Text("Sign out") }
     }
     if (show) {
-        OAuthFields(clientId, { clientId = it }, scopes, { scopes = it })
+        OAuthFields(clientId, { clientId = it }, scopes, { scopes = it }, url)
         Button(enabled = !busy, onClick = {
             busy = true
             note = "Discovering OAuth settings…"
@@ -336,7 +337,11 @@ private fun McpOAuthCardControls(serverId: String, enabled: Boolean) {
 }
 
 @Composable
-private fun OAuthFields(clientId: String, onClientId: (String) -> Unit, scopes: String, onScopes: (String) -> Unit) {
+private fun OAuthFields(clientId: String, onClientId: (String) -> Unit, scopes: String, onScopes: (String) -> Unit, url: String) {
+    if (url.trim().trimEnd('/').equals(REVISE_MCP_URL, ignoreCase = true)) {
+        Text("Revise uses browser sign-in and returns through an on-device callback. No client ID, API key, or custom headers are needed.")
+        return
+    }
     Text("Uses OAuth discovery and PKCE. Leave Client ID blank if the provider supports automatic registration. Otherwise use a public client registered with this callback:")
     SelectionContainer { Text(MCP_OAUTH_REDIRECT, style = MaterialTheme.typography.bodySmall) }
     KaiOutlinedTextField(clientId, onClientId, modifier = Modifier.fillMaxWidth(),
@@ -424,7 +429,7 @@ private fun AddMcpServerDialog(
                     }
                 }
                 if (oauthMode) {
-                    OAuthFields(oauthClientId, { oauthClientId = it }, oauthScopes, { oauthScopes = it })
+                    OAuthFields(oauthClientId, { oauthClientId = it }, oauthScopes, { oauthScopes = it }, url)
                     if (oauthMessage.isNotBlank()) Text(oauthMessage, style = MaterialTheme.typography.bodySmall)
                 } else if (requiresAuth) {
                     KaiOutlinedTextField(

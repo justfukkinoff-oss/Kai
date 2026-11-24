@@ -48,7 +48,7 @@ sealed interface DistroSpec {
     fun rootfsSources(): List<RootfsSource>
 
     /** Post-extraction fixes that must land before the first proot run. */
-    fun configure(rootfsDir: File)
+    fun configure(rootfsDir: File, dnsServers: List<String>)
 
     /** proot flags this distro cannot work without. */
     val prootArgs: List<String> get() = emptyList()
@@ -88,9 +88,9 @@ object AlpineSpec : DistroSpec {
         }
     }
 
-    override fun configure(rootfsDir: File) {
+    override fun configure(rootfsDir: File, dnsServers: List<String>) {
         TarExtractor.makeWritable(rootfsDir)
-        TarExtractor.writeResolvConf(rootfsDir)
+        TarExtractor.writeResolvConf(rootfsDir, dnsServers)
         writeRepositories(rootfsDir, ALPINE_MIRRORS.first())
     }
 
@@ -160,9 +160,9 @@ object DebianSpec : DistroSpec {
         )
     }
 
-    override fun configure(rootfsDir: File) {
+    override fun configure(rootfsDir: File, dnsServers: List<String>) {
         TarExtractor.makeWritable(rootfsDir)
-        TarExtractor.writeResolvConf(rootfsDir)
+        TarExtractor.writeResolvConf(rootfsDir, dnsServers)
         // apt and dpkg assume these exist; an LXC image ships some of them empty
         // and the tar extractor skips empty directories it never saw an entry for.
         listOf(

@@ -1,6 +1,7 @@
 package com.inspiredandroid.kai.linux
 
 import android.content.Context
+import android.net.ConnectivityManager
 import java.io.File
 
 /** Directory under `filesDir` holding the chat sandbox's Linux. */
@@ -70,6 +71,14 @@ class LinuxPaths(
     private val markerFile: File get() = File(root, MARKER_FILE)
 
     fun archiveFile(spec: DistroSpec): File = File(root, spec.archiveName)
+
+    fun activeDnsServers(): List<String> = runCatching {
+        val connectivity = appContext.getSystemService(ConnectivityManager::class.java)
+        val network = connectivity?.activeNetwork ?: return@runCatching emptyList()
+        connectivity.getLinkProperties(network)?.dnsServers.orEmpty()
+            .filterNot { it.isAnyLocalAddress || it.isLoopbackAddress || it.isLinkLocalAddress }
+            .mapNotNull { it.hostAddress?.substringBefore('%') }
+    }.getOrDefault(emptyList())
 
     val nativeLibDir: String get() = appContext.applicationInfo.nativeLibraryDir
 

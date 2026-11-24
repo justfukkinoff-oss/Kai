@@ -74,7 +74,7 @@ class LinuxInstaller(private val paths: LinuxPaths) {
 
         currentCoroutineContext().ensureActive()
         onStep(InstallStep.Configure)
-        spec.configure(paths.rootfsDir)
+        spec.configure(paths.rootfsDir, paths.activeDnsServers())
         paths.ensureMountPoints()
 
         val launcher = launcherFor(spec)
@@ -111,16 +111,13 @@ class LinuxInstaller(private val paths: LinuxPaths) {
         env = spec.env,
     )
 
-    /**
-     * Alpine's package download can fail after a successful index request.
-     * Retry the transaction on the next mirror, not just the index refresh.
-     */
     private suspend fun refreshPackageIndex(spec: DistroSpec, launcher: ProotLauncher) {
         val updateCommand = spec.distro.packageManager.updateCommand
         val result = runInterruptible { launcher.execute(updateCommand, timeoutSeconds = UPDATE_TIMEOUT_SECONDS) }
         check(result.success) { "`$updateCommand` failed: ${result.failureDetail()}" }
     }
 
+    /** Retry the whole transaction; a package download can fail after a successful index request. */
     private suspend fun installAlpinePackages(spec: AlpineSpec, launcher: ProotLauncher, onStep: (InstallStep) -> Unit) {
         val failures = mutableListOf<String>()
         val packages = spec.distro.basePackages
@@ -132,7 +129,7 @@ class LinuxInstaller(private val paths: LinuxPaths) {
             val command = spec.distro.packageManager.installCommand(packages).replaceFirst("apk ", "apk --timeout 12 --no-progress ")
             val result = runInterruptible { launcher.execute(command, timeoutSeconds = 50) }
             if (result.success) return
-            failures += "${java.net.URI.create(mirror).host}: ${result.failureDetail(260).lineSequence().lastOrNull()}"
+            failures += "${java.net.URI.create(mirror).host}: ${result.failureDetail(260).replace('\n', ' ')}"
         }
         error("Alpine bootstrap could not install ${packages.joinToString()}: ${failures.joinToString("; ")}")
     }
@@ -146,10 +143,9 @@ class LinuxInstaller(private val paths: LinuxPaths) {
         // apt resolves the whole set at once, which is both faster and the only
         // way its dependency solver sees the full picture.
         onStep(InstallStep.Packages(distro.basePackages))
-        val result = runInterruptible { launcher.execute(
-            manager.installCommand(distro.basePackages),
-            timeoutSeconds = PACKAGE_TIMEOUT_SECONDS,
-        ) }
+        val result = runInterruptible {
+            launcher.execute(manager.installCommand(distro.basePackages), timeoutSeconds = PACKAGE_TIMEOUT_SECONDS)
+        }
         check(result.success) { "Failed to install base packages: ${result.failureDetail()}" }
     }
 
