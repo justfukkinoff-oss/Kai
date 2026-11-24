@@ -116,9 +116,11 @@ fun SettingsScreen(
     sandboxViewModel: SandboxViewModel = koinViewModel(),
     onNavigateBack: () -> Unit,
     navigationTabBar: (@Composable () -> Unit)? = null,
+    initialTab: SettingsTab? = null,
 ) {
     val uiState by viewModel.state.collectAsStateWithLifecycle()
     val sandboxState by sandboxViewModel.state.collectAsStateWithLifecycle()
+    LaunchedEffect(initialTab) { if (initialTab != null) viewModel.actions.onSelectTab(initialTab) }
 
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
@@ -238,7 +240,13 @@ fun SettingsScreenContent(
             }
 
             val visibleTabs = remember(sandboxState.showSandbox) {
-                SettingsTab.entries.filter { it != SettingsTab.Sandbox || sandboxState.showSandbox }.toImmutableList()
+                SettingsTab.entries.filter {
+                    when (it) {
+                        SettingsTab.Sandbox -> sandboxState.showSandbox
+                        SettingsTab.Library -> com.inspiredandroid.kai.currentPlatform is com.inspiredandroid.kai.Platform.Mobile.Android
+                        else -> true
+                    }
+                }.toImmutableList()
             }
 
             SettingsTabSelector(
@@ -247,7 +255,7 @@ fun SettingsScreenContent(
                 onSelectTab = actions.onSelectTab,
             )
 
-            val settingsScrollState = rememberScrollState()
+            val settingsScrollState = key(filteredUiState.currentTab) { rememberScrollState() }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 Column(
                     Modifier.fillMaxWidth().verticalScroll(settingsScrollState),
@@ -270,8 +278,9 @@ fun SettingsScreenContent(
 
                             SettingsTab.Agent -> {
                                 AgentContent(uiState = filteredUiState, actions = actions)
-                                LegalLibrarySection()
                             }
+
+                            SettingsTab.Library -> LegalLibrarySection()
 
                             SettingsTab.Services -> {
                                 ServicesContent(uiState = filteredUiState, actions = actions)
@@ -419,6 +428,7 @@ private fun SettingsTabSelector(
                         text = when (tab) {
                             SettingsTab.General -> stringResource(Res.string.settings_tab_general)
                             SettingsTab.Agent -> stringResource(Res.string.settings_tab_agent)
+                            SettingsTab.Library -> "Legal Library"
                             SettingsTab.Services -> stringResource(Res.string.settings_tab_services)
                             SettingsTab.Tools -> stringResource(Res.string.settings_tab_tools)
                             SettingsTab.Sandbox -> stringResource(Res.string.settings_tab_sandbox)

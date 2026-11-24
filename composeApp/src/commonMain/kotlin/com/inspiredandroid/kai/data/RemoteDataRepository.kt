@@ -880,7 +880,7 @@ class RemoteDataRepository(
         // collide on the same shell mutex. Persistence is deferred to the
         // existing saveCurrentConversation() flow that runs after the response.
         if (_currentConversationId.value == null) {
-            setCurrentConversationId(Uuid.random().toString())
+            createConversationId()
         }
         // Process every attached file: classify, compress/encode, and build an Attachment.
         // readBytes() is suspend, so this happens before the StateFlow.update block.
@@ -1591,9 +1591,7 @@ class RemoteDataRepository(
         if (history.isEmpty()) return
 
         val now = Clock.System.now().toEpochMilliseconds()
-        val conversationId = _currentConversationId.value ?: Uuid.random().toString().also {
-            setCurrentConversationId(it)
-        }
+        val conversationId = _currentConversationId.value ?: createConversationId()
         continuity.write(conversationId, history.mapNotNull { item ->
             val source = when {
                 item.role == History.Role.USER -> "User"
@@ -1678,6 +1676,17 @@ class RemoteDataRepository(
     private fun setCurrentConversationId(id: String?) {
         _currentConversationId.value = id
         appSettings.setCurrentConversationId(id)
+    }
+
+    private fun createConversationId(): String = Uuid.random().toString().also { id ->
+        for (key in listOf("matter", "profile")) {
+            val selected = appSettings.libraryValue("$key.draft")
+            if (selected.isNotBlank()) {
+                appSettings.setLibraryValue("$key.$id", selected)
+                appSettings.setLibraryValue("$key.draft", "")
+            }
+        }
+        setCurrentConversationId(id)
     }
 
     // Conversation management
@@ -2015,7 +2024,7 @@ class RemoteDataRepository(
 
     override suspend fun setObjective(goal: String) {
         if (_currentConversationId.value == null) {
-            setCurrentConversationId(Uuid.random().toString())
+            createConversationId()
         }
         val conversationId = _currentConversationId.value ?: return
         objectiveModeFlag = goal.isNotBlank()

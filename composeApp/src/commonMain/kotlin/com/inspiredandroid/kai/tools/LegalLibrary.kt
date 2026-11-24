@@ -47,14 +47,15 @@ internal object LegalLibrary : KoinComponent {
         settings.setLibraryValue("route.$role", if (value.url.isBlank() || value.model.isBlank()) "" else Json.encodeToString(LibraryRoute.serializer(), value))
     }
 
+    val sandboxStatus get() = sandbox.status
     fun currentMatter() = settings.getCurrentConversationId()?.let(::matterFor)
+        ?: settings.libraryValue("matter.draft").takeIf { settings.getCurrentConversationId() == null && it.isNotBlank() }
     fun matterFor(chat: String) = settings.libraryValue("matter.$chat").takeIf { it.isNotBlank() }
     fun courtListenerToken() = settings.libraryValue("courtListenerToken")
     fun saveCourtListenerToken(value: String) = settings.setLibraryValue("courtListenerToken", value.trim())
-    fun bind(matter: String): Boolean {
-        val chat = settings.getCurrentConversationId() ?: return false
+    fun bind(matter: String) {
+        val chat = settings.getCurrentConversationId() ?: "draft"
         settings.setLibraryValue("matter.$chat", matter)
-        return true
     }
 
     private fun issue(message: String) = buildJsonObject { put("error", message) }

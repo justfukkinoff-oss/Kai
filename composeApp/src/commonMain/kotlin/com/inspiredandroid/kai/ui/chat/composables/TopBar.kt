@@ -15,6 +15,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -47,6 +49,7 @@ internal fun TopBar(
     isChatHistoryEmpty: Boolean,
     hasSavedConversations: Boolean,
     onNavigateToSettings: () -> Unit,
+    onNavigateToLibrary: (() -> Unit)? = null,
     isSandboxAvailable: Boolean,
     isSandboxOpen: Boolean,
     isShellExecuting: Boolean,
@@ -74,6 +77,7 @@ internal fun TopBar(
         Row {
             LeadingButtons(textToSpeech, isSpeechOutputEnabled, isSpeaking, actions, isChatHistoryEmpty, hasSavedConversations, onShowHistory, isSandboxAvailable, isSandboxOpen, isShellExecuting, onToggleSandbox)
             Spacer(Modifier.weight(1f))
+            if (onNavigateToLibrary != null) TextButton(onClick = onNavigateToLibrary) { Text("Library") }
             if (textToSpeech != null) {
                 SpeechToggleButton(textToSpeech, isSpeechOutputEnabled, isSpeaking, actions)
             }

@@ -54,6 +54,7 @@ enum class ConnectionStatus {
 enum class SettingsTab {
     General,
     Agent,
+    Library,
     Services,
     Tools,
     Sandbox,

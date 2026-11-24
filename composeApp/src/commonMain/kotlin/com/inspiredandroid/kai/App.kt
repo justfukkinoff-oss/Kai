@@ -70,6 +70,9 @@ object Home
 @SerialName("settings")
 object Settings
 
+@Serializable
+private object LibrarySettings
+
 @Composable
 fun App(
     navController: NavHostController,
@@ -214,6 +217,7 @@ private fun AppContent(
                             onNavigateToSettings = {
                                 navController.navigate(Settings)
                             },
+                            onNavigateToLibrary = { navController.navigate(LibrarySettings) },
                             isSandboxAvailable = currentPlatform is Platform.Mobile.Android,
                             isKaiBuildAvailable = currentPlatform is Platform.Mobile.Android,
                             navigationTabBar = if (showTabBar) navigationTabBar else null,
@@ -233,6 +237,15 @@ private fun AppContent(
                                 navController.navigateUp()
                             },
                             navigationTabBar = if (showTabBar) navigationTabBar else null,
+                        )
+                    }
+                    composable<LibrarySettings> {
+                        SettingsScreen(
+                            onNavigateBack = {
+                                chatViewModel.refreshSettings()
+                                navController.navigateUp()
+                            },
+                            initialTab = com.inspiredandroid.kai.ui.settings.SettingsTab.Library,
                         )
                     }
                 }
