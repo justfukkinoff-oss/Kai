@@ -8,6 +8,10 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -30,6 +34,7 @@ class McpServerManager(private val appSettings: AppSettings) {
     private val clients = mutableMapOf<String, McpClient>()
     private val discoveredTools = mutableMapOf<String, List<McpToolMetadata>>()
     private val oauth = McpOAuth(appSettings)
+    private val oauthScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val oauthStatus = MutableStateFlow<McpOAuthStatus?>(null)
     internal val oauthEvents = oauthStatus.asStateFlow()
 
@@ -37,7 +42,7 @@ class McpServerManager(private val appSettings: AppSettings) {
 
     internal suspend fun beginOAuth(serverId: String, clientId: String, scope: String): String {
         val server = getServers().find { it.id == serverId } ?: throw McpException("MCP server not found.")
-        return oauth.begin(server, clientId, scope)
+        return oauth.begin(server, clientId, scope) { callback -> oauthScope.launch { handleOAuthRedirect(callback) } }
     }
 
     suspend fun handleOAuthRedirect(callback: String) {

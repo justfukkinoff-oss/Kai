@@ -31,11 +31,15 @@ import kotlin.time.Clock
 internal const val MCP_OAUTH_REDIRECT = "rekai://mcp-oauth/callback"
 internal data class OAuthProof(val state: String, val verifier: String, val challenge: String)
 internal expect fun mcpOAuthProof(): OAuthProof?
+internal data class McpOAuthLoopback(val redirect: String, val close: () -> Unit)
+internal expect fun openMcpOAuthLoopback(state: String, onCallback: (String) -> Unit): McpOAuthLoopback?
+internal const val REVISE_MCP_URL = "https://mcp.revise.io/mcp"
 
 @Serializable
 private data class PendingMcpAuthorization(
     val serverId: String, val serverUrl: String, val state: String, val verifier: String,
     val tokenEndpoint: String, val clientId: String, val resource: String, val started: Long,
+    val redirect: String = MCP_OAUTH_REDIRECT,
 )
 
 @Serializable
@@ -47,6 +51,8 @@ private data class McpAuthorization(
 internal class McpOAuth(private val settings: AppSettings) {
     private val json = Json { ignoreUnknownKeys = true }
     private val tokenLock = Mutex()
+    private val attemptLock = Mutex()
+    private var loopback: McpOAuthLoopback? = null
     private val client by lazy {
         httpClient {
             followRedirects = false
@@ -95,7 +101,10 @@ internal class McpOAuth(private val settings: AppSettings) {
         null
     }
 
-    internal suspend fun begin(server: McpServerConfig, enteredClientId: String, enteredScope: String): String {
+    internal suspend fun begin(server: McpServerConfig, enteredClientId: String, enteredScope: String, onCallback: (String) -> Unit): String = attemptLock.withLock {
+        loopback?.close?.invoke()
+        loopback = null
+        settings.setLibraryValue("mcp.oauth.pending", "")
         val proof = mcpOAuthProof() ?: throw McpException("OAuth browser sign-in is available on Android.")
         val endpoint = secureUrl(server.url)
         val challenge = try {
@@ -141,23 +150,33 @@ internal class McpOAuth(private val settings: AppSettings) {
         val token = provider.string("token_endpoint") ?: throw McpException("OAuth token endpoint missing.")
         secureUrl(authorize)
         secureUrl(token)
-        val clientId = enteredClientId.trim().ifBlank { register(provider) }
-        val pending = PendingMcpAuthorization(server.id, server.url, proof.state, proof.verifier, token, clientId, resourceUri, now())
+        val useLoopback = server.url.trimEnd('/').equals(REVISE_MCP_URL, ignoreCase = true)
+        val listener = if (useLoopback) openMcpOAuthLoopback(proof.state, onCallback)
+            ?: throw McpException("Could not open the on-device OAuth callback.") else null
+        val redirect = listener?.redirect ?: MCP_OAUTH_REDIRECT
+        val clientId = try {
+            if (useLoopback) register(provider, redirect) else enteredClientId.trim().ifBlank { register(provider, redirect) }
+        } catch (e: Exception) {
+            listener?.close?.invoke()
+            throw e
+        }
+        loopback = listener
+        val pending = PendingMcpAuthorization(server.id, server.url, proof.state, proof.verifier, token, clientId, resourceUri, now(), redirect)
         settings.setLibraryValue("mcp.oauth.pending", json.encodeToString(PendingMcpAuthorization.serializer(), pending))
-        val values = linkedMapOf("response_type" to "code", "client_id" to clientId, "redirect_uri" to MCP_OAUTH_REDIRECT,
+        val values = linkedMapOf("response_type" to "code", "client_id" to clientId, "redirect_uri" to redirect,
             "state" to proof.state, "code_challenge" to proof.challenge, "code_challenge_method" to "S256", "resource" to resourceUri)
         val scope = challenged("scope") ?: enteredScope.trim().ifBlank { resource.strings("scopes_supported").joinToString(" ") }
         if (scope.isNotBlank()) values["scope"] = scope
-        return appendQuery(authorize, values)
+        appendQuery(authorize, values)
     }
 
-    private suspend fun register(provider: JsonObject): String {
+    private suspend fun register(provider: JsonObject, redirect: String): String {
         val url = provider.string("registration_endpoint")
             ?: throw McpException("This provider requires a registered client ID. Register the displayed callback URL, then enter its public client ID.")
         secureUrl(url)
         val configuration = buildJsonObject {
             put("client_name", "Re-Kai")
-            put("redirect_uris", JsonArray(listOf(JsonPrimitive(MCP_OAUTH_REDIRECT))))
+            put("redirect_uris", JsonArray(listOf(JsonPrimitive(redirect))))
             put("grant_types", JsonArray(listOf(JsonPrimitive("authorization_code"), JsonPrimitive("refresh_token"))))
             put("response_types", JsonArray(listOf(JsonPrimitive("code"))))
             put("token_endpoint_auth_method", "none")
@@ -179,11 +198,16 @@ internal class McpOAuth(private val settings: AppSettings) {
     internal fun forget(serverId: String) = settings.setLibraryValue("mcp.oauth.$serverId", "")
 
     internal suspend fun finish(callback: String, serverFor: (String) -> McpServerConfig?): Pair<String, String?>? {
-        if (callback.substringBefore('?') != MCP_OAUTH_REDIRECT || '#' in callback) return null
-        val pending = runCatching { json.decodeFromString<PendingMcpAuthorization>(settings.libraryValue("mcp.oauth.pending")) }.getOrNull() ?: return null
         val params = try { Url(callback).parameters } catch (_: Exception) { return null }
-        if (params.getAll("state")?.singleOrNull() != pending.state) return null
-        settings.setLibraryValue("mcp.oauth.pending", "")
+        val pending = attemptLock.withLock {
+            val saved = runCatching { json.decodeFromString<PendingMcpAuthorization>(settings.libraryValue("mcp.oauth.pending")) }.getOrNull()
+                ?: return null
+            if (callback.substringBefore('?') != saved.redirect || '#' in callback || params.getAll("state")?.singleOrNull() != saved.state) return null
+            settings.setLibraryValue("mcp.oauth.pending", "")
+            loopback?.close?.invoke()
+            loopback = null
+            saved
+        }
         if (now() - pending.started !in 0..600) return pending.serverId to "Sign-in expired. Start it again."
         if (serverFor(pending.serverId)?.url != pending.serverUrl) return pending.serverId to "The MCP server changed during sign-in."
         val code = params.getAll("code")?.singleOrNull()
@@ -192,7 +216,7 @@ internal class McpOAuth(private val settings: AppSettings) {
             val original = McpAuthorization(pending.serverUrl, pending.tokenEndpoint, pending.clientId, pending.resource, "", null, null)
             tokenLock.withLock {
                 val updated = exchange(original, mapOf("grant_type" to "authorization_code", "code" to code,
-                    "redirect_uri" to MCP_OAUTH_REDIRECT, "code_verifier" to pending.verifier))
+                    "redirect_uri" to pending.redirect, "code_verifier" to pending.verifier))
                 store(pending.serverId, updated)
             }
             pending.serverId to null
