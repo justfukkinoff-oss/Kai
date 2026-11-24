@@ -7,11 +7,16 @@ import com.inspiredandroid.kai.network.tools.ToolInfo
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 
 private val serverIdRegex = Regex("[^a-z0-9]")
+
+internal data class McpOAuthStatus(val serverId: String, val message: String, val connected: Boolean)
 
 class McpServerManager(private val appSettings: AppSettings) {
 
@@ -24,6 +29,33 @@ class McpServerManager(private val appSettings: AppSettings) {
     private val mutex = Mutex()
     private val clients = mutableMapOf<String, McpClient>()
     private val discoveredTools = mutableMapOf<String, List<McpToolMetadata>>()
+    private val oauth = McpOAuth(appSettings)
+    private val oauthStatus = MutableStateFlow<McpOAuthStatus?>(null)
+    internal val oauthEvents = oauthStatus.asStateFlow()
+
+    internal fun hasOAuth(serverId: String) = getServers().firstOrNull { it.id == serverId }?.let(oauth::connected) == true
+
+    internal suspend fun beginOAuth(serverId: String, clientId: String, scope: String): String {
+        val server = getServers().find { it.id == serverId } ?: throw McpException("MCP server not found.")
+        return oauth.begin(server, clientId, scope)
+    }
+
+    suspend fun handleOAuthRedirect(callback: String) {
+        val (id, error) = oauth.finish(callback) { serverId -> getServers().find { it.id == serverId } } ?: return
+        if (error != null) {
+            oauthStatus.value = McpOAuthStatus(id, error, false)
+            return
+        }
+        val tools = connectAndDiscoverTools(id)
+        oauthStatus.value = McpOAuthStatus(id, if (tools.isSuccess) "Signed in and connected." else "Signed in, but tool discovery failed. Check the server URL and scopes.", tools.isSuccess)
+    }
+
+    internal fun forgetOAuth(serverId: String) {
+        oauth.forget(serverId)
+        clients.remove(serverId)?.close()
+        discoveredTools.remove(serverId)
+        oauthStatus.value = McpOAuthStatus(serverId, "Signed out on this device.", false)
+    }
 
     // NOTE: the mutators below are read-modify-write without a lock. Making them safe means making
     // them suspend, which ripples through DataRepository and the settings UI — tracked separately.
@@ -74,6 +106,7 @@ class McpServerManager(private val appSettings: AppSettings) {
         val servers = getServers().toMutableList()
         servers.removeAll { it.id == serverId }
         saveServers(servers)
+        oauth.forget(serverId)
         clients[serverId]?.close()
         clients.remove(serverId)
         discoveredTools.remove(serverId)
@@ -100,7 +133,8 @@ class McpServerManager(private val appSettings: AppSettings) {
         // Close existing client if any
         mutex.withLock { clients[serverId] }?.close()
 
-        val client = McpClient(server.url, server.headers)
+        val client = if (oauth.connected(server)) McpClient(server.url, server.headers) { rejected -> oauth.bearer(server, rejected) }
+        else McpClient(server.url, server.headers)
         return try {
             client.initialize()
             val toolDefs = client.listTools()
@@ -123,6 +157,7 @@ class McpServerManager(private val appSettings: AppSettings) {
                 clients.remove(serverId)
                 discoveredTools.remove(serverId)
             }
+            if (e is CancellationException) throw e
             Result.failure(e)
         }
     }

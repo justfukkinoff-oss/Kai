@@ -21,10 +21,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.rememberNavController
 import com.inspiredandroid.kai.data.AppSettings
 import com.inspiredandroid.kai.data.DataRepository
 import com.inspiredandroid.kai.data.ThemeMode
+import com.inspiredandroid.kai.mcp.McpServerManager
 import com.inspiredandroid.kai.ui.DarkColorScheme
 import com.inspiredandroid.kai.ui.LightColorScheme
 import io.github.vinceglb.filekit.FileKit
@@ -33,6 +35,7 @@ import nl.marc_apps.tts.TextToSpeechEngine
 import nl.marc_apps.tts.TextToSpeechFactory
 import nl.marc_apps.tts.TextToSpeechInstance
 import org.koin.android.ext.android.get
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -124,6 +127,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleDeepLinkIntent(intent: Intent?) {
+        if (intent?.action == Intent.ACTION_VIEW) {
+            val callback = intent.data
+            if (callback?.scheme == "rekai" && callback.host == "mcp-oauth" && callback.path == "/callback") {
+                intent.data = null
+                val serverManager: McpServerManager = get()
+                lifecycleScope.launch { serverManager.handleOAuthRedirect(callback.toString()) }
+                return
+            }
+        }
         if (intent?.getBooleanExtra(EXTRA_OPEN_HEARTBEAT, false) == true) {
             val dataRepository: DataRepository = get()
             dataRepository.requestOpenHeartbeat()

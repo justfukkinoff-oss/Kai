@@ -7,6 +7,7 @@ import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
+import io.ktor.client.statement.HttpResponse
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import kotlinx.serialization.json.Json
@@ -18,6 +19,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 class McpClient(
     private val url: String,
     private val headers: Map<String, String>,
+    private val oauthBearer: (suspend (rejected: String?) -> String?)? = null,
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -27,6 +29,7 @@ class McpClient(
     }
 
     private val client: HttpClient = httpClient {
+        if (oauthBearer != null) followRedirects = false
         install(HttpTimeout) {
             requestTimeoutMillis = 60_000
             connectTimeoutMillis = 10_000
@@ -34,6 +37,7 @@ class McpClient(
     }
     private var sessionId: String? = null
     private var requestId = 0
+    private var protocol: String? = null
 
     private fun nextId(): Int = ++requestId
 
@@ -45,27 +49,40 @@ class McpClient(
         )
         val requestBody = json.encodeToString(JsonRpcRequest.serializer(), request)
 
-        val response = client.post(url) {
-            contentType(ContentType.Application.Json)
-            header("Accept", "application/json, text/event-stream")
-            sessionId?.let { header("Mcp-Session-Id", it) }
-            this@McpClient.headers.keys.forEach { key ->
-                header(key, this@McpClient.headers[key]!!)
-            }
-            setBody(requestBody)
+        val response = postRpc(requestBody)
+        if (response.status.value !in 200..299) {
+            throw McpException("MCP server returned HTTP ${response.status.value}." +
+                if (response.status.value == 401) " Check credentials or use OAuth sign-in in Settings → Tools." else "")
         }
 
         // Track session ID from response
         response.headers["Mcp-Session-Id"]?.let { sessionId = it }
-
         val responseText = response.bodyAsText()
-
-        // Handle SSE response
         if (response.headers["Content-Type"]?.contains("text/event-stream") == true) {
             return parseSseResponse(responseText)
         }
-
         return json.decodeFromString(JsonRpcResponse.serializer(), responseText)
+    }
+
+    private suspend fun postRpc(requestBody: String): HttpResponse {
+        suspend fun requestWith(token: String?): HttpResponse = client.post(url) {
+            contentType(ContentType.Application.Json)
+            header("Accept", "application/json, text/event-stream")
+            sessionId?.let { header("Mcp-Session-Id", it) }
+            protocol?.let { header("MCP-Protocol-Version", it) }
+            this@McpClient.headers.forEach { (key, value) ->
+                if (token == null || !key.equals("Authorization", true)) header(key, value)
+            }
+            if (token != null) header("Authorization", "Bearer $token")
+            setBody(requestBody)
+        }
+        val token = oauthBearer?.invoke(null)
+        val response = requestWith(token)
+        if (token != null && response.status.value == 401) {
+            val renewed = oauthBearer?.invoke(token)
+            if (renewed != null && renewed != token) return requestWith(renewed)
+        }
+        return response
     }
 
     private fun parseSseResponse(sseText: String): JsonRpcResponse {
@@ -86,7 +103,7 @@ class McpClient(
 
     suspend fun initialize() {
         val params = buildJsonObject {
-            put("protocolVersion", JsonPrimitive("2024-11-05"))
+            put("protocolVersion", JsonPrimitive("2025-11-25"))
             put(
                 "capabilities",
                 buildJsonObject {},
@@ -103,6 +120,8 @@ class McpClient(
         if (response.error != null) {
             throw McpException("Initialize failed: ${response.error.message}")
         }
+        protocol = ((response.result as? JsonObject)?.get("protocolVersion") as? JsonPrimitive)?.content
+            ?.takeIf { it.matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")) }
 
         // Send initialized notification (no id, no response expected)
         sendNotification("notifications/initialized")
@@ -115,14 +134,8 @@ class McpClient(
         }
         val requestBody = json.encodeToString(JsonObject.serializer(), body)
 
-        client.post(url) {
-            contentType(ContentType.Application.Json)
-            sessionId?.let { header("Mcp-Session-Id", it) }
-            this@McpClient.headers.keys.forEach { key ->
-                header(key, this@McpClient.headers[key]!!)
-            }
-            setBody(requestBody)
-        }
+        val response = postRpc(requestBody)
+        if (response.status.value !in 200..299) throw McpException("MCP initialization notification returned HTTP ${response.status.value}.")
     }
 
     suspend fun listTools(): List<McpToolDefinition> {
