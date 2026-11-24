@@ -42,6 +42,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.uuid.Uuid
@@ -320,7 +321,7 @@ private fun LegalLibraryControls(onManageSandbox: () -> Unit) {
                 for ((operation, title) in listOf("reindex" to "Reindex", "reembed" to "Re-embed")) {
                     TextButton(enabled = !running, onClick = {
                         work("$title…") {
-                            val result = LegalLibrary.call(operation, target, mapOf("document" to JsonPrimitive(doc.field("id"))), onProgress = { message = it })
+                            val result = LegalLibrary.call(operation, target, mapOf("document" to JsonPrimitive(doc.field("id")), "force_ocr" to JsonPrimitive(forceOcr)), onProgress = { message = it })
                             refreshDocuments(target)
                             message = result.field("error").ifEmpty { result.field("status") }
                         }
@@ -335,9 +336,18 @@ private fun LegalLibraryControls(onManageSandbox: () -> Unit) {
 private fun LibraryRouteEditor(role: String, title: String) {
     var route by remember(role) { mutableStateOf(LegalLibrary.route(role)) }
     var saved by remember(role) { mutableStateOf("") }
+    var editing by remember(role) { mutableStateOf(false) }
+    var advanced by remember(role) { mutableStateOf(false) }
+    var revealHeaders by remember(role) { mutableStateOf(false) }
     fun edit(value: LibraryRoute) { route = value; saved = "" }
-    Text(title, style = MaterialTheme.typography.titleSmall)
-    OutlinedTextField(route.url, { edit(route.copy(url = it)) }, Modifier.fillMaxWidth(), label = { Text("API endpoint") }, singleLine = true)
+    Text(title, style = MaterialTheme.typography.titleMedium)
+    if (!editing) {
+        val current = LegalLibrary.route(role)
+        Text(if (current.configured) current.model.ifBlank { "Custom endpoint" } else if (role == "ocr") "Local Tesseract" else "Not configured")
+        TextButton(onClick = { editing = true }) { Text("Edit $title") }
+        return
+    }
+    OutlinedTextField(route.url, { edit(route.copy(url = it)) }, Modifier.fillMaxWidth(), label = { Text(if (route.exactUrl) "Complete API URL" else "Base URL, e.g. https://host/v1") }, singleLine = true)
     OutlinedTextField(route.model, { edit(route.copy(model = it)) }, Modifier.fillMaxWidth(), label = { Text("Model ID") }, singleLine = true)
     OutlinedTextField(route.key, { edit(route.copy(key = it)) }, Modifier.fillMaxWidth(), label = { Text("API key (optional for local)") },
         singleLine = true, visualTransformation = PasswordVisualTransformation())
@@ -345,9 +355,48 @@ private fun LibraryRouteEditor(role: String, title: String) {
         TextButton(onClick = { edit(route.copy(format = "")) }) { Text(if (route.format.isEmpty()) "[Compatible]" else "Compatible") }
         TextButton(onClick = { edit(route.copy(format = "nvidia")) }) { Text(if (route.format == "nvidia") "[NVIDIA]" else "NVIDIA") }
     }
-    TextButton(onClick = {
-        LegalLibrary.saveRoute(role, route.copy(url = route.url.trim(), model = route.model.trim(), key = route.key.trim()))
-        saved = if (route.url.isBlank() || route.model.isBlank()) "Cleared" else "Saved"
-    }) { Text("Save $title") }
+    TextButton(onClick = { advanced = !advanced }) { Text(if (advanced) "Hide request settings" else "Headers and request settings") }
+    if (advanced) {
+        Row { Checkbox(route.exactUrl, { edit(route.copy(exactUrl = it)) }); Text("Use exact URL. You can put {{model}} in the URL.") }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (method in listOf("POST", "PUT", "PATCH")) FilterChip(
+                selected = route.method == method, onClick = { edit(route.copy(method = method)) }, label = { Text(method) },
+            )
+        }
+        OutlinedTextField(route.headers, { edit(route.copy(headers = it)) }, Modifier.fillMaxWidth(),
+            label = { Text("Headers: one Name: value per line") }, minLines = 2, maxLines = 5,
+            visualTransformation = if (revealHeaders) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation())
+        TextButton(onClick = { revealHeaders = !revealHeaders }) { Text(if (revealHeaders) "Hide header values" else "Show header values") }
+        Text("Use {{key}} in a header value to insert the API key. A custom Authorization header replaces the default Bearer header.")
+        OutlinedTextField(route.template, { edit(route.copy(template = it)) }, Modifier.fillMaxWidth(),
+            label = { Text("Custom JSON body (optional)") }, minLines = 3, maxLines = 8)
+        val variables = when (role) {
+            "embedding" -> "{{input}}, {{input_type}}"
+            "rerank" -> "{{query}}, {{passages}}, {{top_n}}"
+            "cleanup" -> "{{text}}, {{prompt}}"
+            else -> "{{prompt}}, {{image_base64}}, {{mime_type}}, {{image_url}}"
+        }
+        Text("Put variables in JSON strings: {{model}}, {{body}} (default body), $variables. Array and object values are inserted as JSON.")
+        OutlinedTextField(route.responsePath, { edit(route.copy(responsePath = it)) }, Modifier.fillMaxWidth(),
+            label = { Text("Response path (e.g. candidates.0.content.parts.0.text)") }, singleLine = true)
+        Text(when (role) {
+            "embedding" -> "Point to vectors or a list of items with an embedding field."
+            "rerank" -> "Point to numeric scores in input order, or items with index and score fields."
+            else -> "Point to the response string that contains the resulting text."
+        })
+    }
+    Row {
+        Button(onClick = {
+            val candidate = route.copy(url = route.url.trim(), model = route.model.trim(), key = route.key.trim())
+            saved = when {
+                !candidate.configured -> "Enter a URL and model ID, or select Use exact URL."
+                candidate.template.isNotBlank() && runCatching { Json.parseToJsonElement(candidate.template) }.isFailure -> "The request body must be valid JSON."
+                candidate.headers.lineSequence().any { it.isNotBlank() && !it.substringBefore(':').trim().matches(Regex("[A-Za-z0-9!#%&'*+.^_`|~-]+")) || it.isNotBlank() && ':' !in it } -> "Use Name: value on each header line."
+                else -> { LegalLibrary.saveRoute(role, candidate); "Saved." }
+            }
+        }) { Text("Save") }
+        TextButton(onClick = { LegalLibrary.saveRoute(role, LibraryRoute()); route = LibraryRoute(); saved = "Cleared." }) { Text("Clear route") }
+        TextButton(onClick = { route = LegalLibrary.route(role); editing = false }) { Text("Done") }
+    }
     if (saved.isNotBlank()) Text(saved)
 }

@@ -31,7 +31,19 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.uuid.Uuid
 
 @Serializable
-internal data class LibraryRoute(val url: String = "", val model: String = "", val key: String = "", val format: String = "")
+internal data class LibraryRoute(
+    val url: String = "",
+    val model: String = "",
+    val key: String = "",
+    val format: String = "",
+    val headers: String = "",
+    val exactUrl: Boolean = false,
+    val method: String = "POST",
+    val template: String = "",
+    val responsePath: String = "",
+) {
+    val configured get() = url.isNotBlank() && (model.isNotBlank() || exactUrl)
+}
 
 internal object LegalLibrary : KoinComponent {
     private val sandbox: SandboxController by inject()
@@ -44,7 +56,7 @@ internal object LegalLibrary : KoinComponent {
     }.getOrDefault(LibraryRoute())
 
     fun saveRoute(role: String, value: LibraryRoute) {
-        settings.setLibraryValue("route.$role", if (value.url.isBlank() || value.model.isBlank()) "" else Json.encodeToString(LibraryRoute.serializer(), value))
+        settings.setLibraryValue("route.$role", if (value.url.isBlank()) "" else Json.encodeToString(LibraryRoute.serializer(), value))
     }
 
     val sandboxStatus get() = sandbox.status
@@ -86,8 +98,8 @@ internal object LegalLibrary : KoinComponent {
                 }
                 for (role in selected) {
                     val route = route(role)
-                    if (route.url.isNotBlank() && route.model.isNotBlank()) {
-                        put(role, Json.encodeToJsonElement(LibraryRoute.serializer(), if (action == "list") route.copy(key = "") else route))
+                    if (route.configured) {
+                        put(role, Json.encodeToJsonElement(LibraryRoute.serializer(), if (action == "list") route.copy(key = "", headers = "") else route))
                     }
                 }
             })
@@ -238,6 +250,7 @@ internal object LegalLibraryTools {
             "path" to text("Existing absolute sandbox path", true), "title" to text("Original filename"),
             "doc_type" to text("Document type"), "court" to text("Court"), "date" to text("ISO date"),
             "docket" to text("Docket number"), "photo" to ParameterSchema("boolean", "Describe a photo instead of transcribing a scan", false),
+            "force_ocr" to ParameterSchema("boolean", "Render and OCR every PDF page, including those with embedded text", false),
         )),
     )
 }

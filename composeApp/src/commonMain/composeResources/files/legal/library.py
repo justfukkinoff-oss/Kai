@@ -79,23 +79,66 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def post(route, suffix, body):
-    endpoint = route["url"].rstrip("/")
+def substitute(node, variables):
+    if isinstance(node, list):
+        return [substitute(value, variables) for value in node]
+    if isinstance(node, dict):
+        return {name: substitute(value, variables) for name, value in node.items()}
+    if not isinstance(node, str):
+        return node
+    exact = re.fullmatch(r"\{\{(\w+)\}\}", node)
+    if exact:
+        if exact[1] not in variables:
+            raise ValueError("Unknown request template variable")
+        return variables[exact[1]]
+    return re.sub(r"\{\{(\w+)\}\}", lambda m: str(variables.get(m[1], m[0])), node)
+
+
+def response_value(data, route, default):
+    path = route.get("responsePath", "").strip()
+    current = data
+    for field in (path or default).split(".") if (path or default) != "$" else []:
+        current = current[int(field)] if isinstance(current, list) else current[field]
+    return current
+
+
+def post(route, suffix, body, variables=None):
+    endpoint = route["url"].replace("{{model}}", urllib.parse.quote(route.get("model", ""), safe=""))
     parts = urllib.parse.urlsplit(endpoint)
     if parts.scheme != "https" and not (parts.scheme == "http" and parts.hostname in ("localhost", "127.0.0.1", "::1")):
         raise ValueError("Choose an HTTPS endpoint or localhost")
     if parts.username or parts.password:
         raise ValueError("Enter the credential separately from the endpoint")
-    url = endpoint if endpoint.endswith("/" + suffix) else endpoint + "/" + suffix
+    if parts.fragment:
+        raise ValueError("API endpoint cannot contain a fragment")
+    path = parts.path.rstrip("/")
+    url = endpoint if route.get("exactUrl") else urllib.parse.urlunsplit(parts._replace(
+        path=path if path.endswith("/" + suffix) else path + "/" + suffix))
     headers = {"Content-Type": "application/json"}
     if route.get("key"):
         headers["Authorization"] = "Bearer " + route["key"]
-    request = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers)
+    for line in route.get("headers", "").splitlines():
+        if not line.strip():
+            continue
+        name, separator, value = line.partition(":")
+        name = name.strip()
+        if not separator or not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name) or name.lower() in ("host", "content-length", "transfer-encoding"):
+            raise ValueError("Invalid API header")
+        headers = {k: v for k, v in headers.items() if k.casefold() != name.casefold()}
+        headers[name] = value.strip().replace("{{key}}", route.get("key", ""))
+    if route.get("template"):
+        body = substitute(json.loads(route["template"]), dict(variables or {}, model=route.get("model", ""), body=body))
+    method = route.get("method", "POST")
+    if method not in ("POST", "PUT", "PATCH"):
+        raise ValueError("Unsupported HTTP method")
+    request = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers, method=method)
     try:
         with urllib.request.build_opener(NoRedirect()).open(request, timeout=35) as response:
             return json.loads(response.read(12_000_000))
     except urllib.error.HTTPError as exc:
         raise ValueError(f"Model endpoint returned HTTP {exc.code}") from None
+    except (urllib.error.URLError, OSError):
+        raise ValueError("Could not connect to model endpoint") from None
 
 
 def normalized_vector(values):
@@ -111,14 +154,22 @@ def embed(route, values, role):
     body = {"model": route["model"], "input": values, "encoding_format": "float"}
     if route.get("format") == "nvidia" or "nvidia.com" in (urllib.parse.urlsplit(route["url"]).hostname or ""):
         body.update(input_type=role, truncate="END")
-    rows = sorted(post(route, "embeddings", body)["data"], key=lambda x: x["index"])
-    if [row["index"] for row in rows] != list(range(len(values))):
+    data = post(route, "embeddings", body, {"input": values, "input_type": role})
+    rows = response_value(data, route, "data")
+    if rows and isinstance(rows[0], (float, int)):
+        rows = [rows]
+    if rows and isinstance(rows[0], dict):
+        pairs = sorted((row.get("index", i), row["embedding"]) for i, row in enumerate(rows))
+    else:
+        pairs = list(enumerate(rows))
+    if [index for index, _ in pairs] != list(range(len(values))):
         raise ValueError("Embedding response did not cover every input")
-    return [normalized_vector(row["embedding"]) for row in rows]
+    return [normalized_vector(vector) for _, vector in pairs]
 
 
 def fingerprint(route):
-    return hashlib.sha256((route["url"].rstrip("/") + "\n" + route["model"] + "\n" + route.get("format", "") + "\nraw-v1").encode()).hexdigest()
+    fields = ("url", "model", "format", "exactUrl", "method", "template", "responsePath")
+    return hashlib.sha256(json.dumps({name: route.get(name, "") for name in fields}, sort_keys=True).encode()).hexdigest()
 
 
 def dot(a, b):
@@ -126,14 +177,16 @@ def dot(a, b):
 
 
 def rerank(route, query, passages):
+    variables = {"query": query, "passages": passages, "top_n": len(passages)}
     if route.get("format") == "nvidia":
         body = {"model": route["model"], "query": {"text": query},
                 "passages": [{"text": x} for x in passages], "truncate": "END"}
-        rows = post(route, "reranking", body)["rankings"]
-        return [(row["index"], float(row["logit"])) for row in rows]
-    rows = post(route, "rerank", {"model": route["model"], "query": query,
-                "documents": passages, "top_n": len(passages)})["results"]
-    return [(row["index"], float(row["relevance_score"])) for row in rows]
+        rows = response_value(post(route, "reranking", body, variables), route, "rankings")
+    else:
+        rows = response_value(post(route, "rerank", {"model": route["model"], "query": query,
+                              "documents": passages, "top_n": len(passages)}, variables), route, "results")
+    return [(row.get("index", i), float(row.get("relevance_score", row.get("logit", row.get("score")))))
+            if isinstance(row, dict) else (i, float(row)) for i, row in enumerate(rows)]
 
 
 def run(args):
@@ -162,7 +215,8 @@ def vision(route, image, photo=False):
            if photo else "Transcribe only. Preserve exact line breaks, line numbers, speakers, Bates labels, ECF headers and exhibit stamps; mark unclear text [illegible], never invent.")
     body = {"model": route["model"], "messages": [{"role": "user", "content": [
         {"type": "text", "text": cue}, {"type": "image_url", "image_url": {"url": f"data:image/{mime};base64,{data}"}}]}]}
-    return post(route, "chat/completions", body)["choices"][0]["message"]["content"].strip()
+    variables = {"prompt": cue, "image_base64": data, "mime_type": f"image/{mime}", "image_url": f"data:image/{mime};base64,{data}"}
+    return response_value(post(route, "chat/completions", body, variables), route, "choices.0.message.content").strip()
 
 
 def ocr_page(path, routes, photo=False):
@@ -182,7 +236,7 @@ def ocr_page(path, routes, photo=False):
     return raw, method
 
 
-def load_pages(path, routes, work, photo):
+def load_pages(path, routes, work, photo, force_ocr=False):
     extension = path.suffix.lower()
     if extension == ".pdf":
         if not shutil.which("pdftotext"):
@@ -191,15 +245,19 @@ def load_pages(path, routes, work, photo):
         if texts and not texts[-1].strip():
             texts.pop()
         for page, raw in enumerate(texts, 1):
-            if raw.strip():
+            if raw.strip() and not force_ocr:
                 yield page, raw, "pdf-text"
                 continue
             progress(f"OCR page {page}/{len(texts)}")
             image = work / f"page-{page}"
-            run(["pdftoppm", "-f", str(page), "-l", str(page), "-r", "160", "-singlefile", "-png", str(path), str(image)])
             png = image.with_suffix(".png")
             try:
-                yield (page, *ocr_page(png, routes))
+                run(["pdftoppm", "-f", str(page), "-l", str(page), "-r", "180", "-singlefile", "-png", str(path), str(image)])
+                transcription, method = ocr_page(png, routes)
+                yield (page, transcription, method) if transcription.strip() else (page, raw, "pdf-text-ocr-unavailable" if raw.strip() else "needs_ocr")
+            except (OSError, subprocess.SubprocessError, ValueError):
+                progress(f"OCR unavailable for page {page}; continuing")
+                yield page, raw, ("pdf-text-ocr-unavailable" if raw.strip() else "needs_ocr")
             finally:
                 png.unlink(missing_ok=True)
     elif extension in (".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif"):
@@ -300,13 +358,14 @@ def ingest(db, request, scope, routes, work):
     original = ROOT / "originals" / (identifier + suffix)
     original.parent.mkdir(exist_ok=True)
     existing = db.execute("SELECT * FROM docs WHERE id=?", (identifier,)).fetchone()
-    if existing and not request.get("reindex"):
+    if existing and not (request.get("reindex") or request.get("force_ocr")):
         message = embed_missing(db, identifier, routes.get("embedding")) if request.get("embed", True) else "Already indexed"
         return {"document": identifier, "title": existing["title"], "path": existing["origin"], "status": message, "duplicate": True}
     if not original.exists():
         shutil.copyfile(src, original)
     pages = list(load_pages(original, routes, work, bool(request.get("photo")) or bool(existing and
-        db.execute("SELECT 1 FROM pages WHERE doc=? AND method IN ('photo-description','needs_photo_model')", (identifier,)).fetchone())))
+        db.execute("SELECT 1 FROM pages WHERE doc=? AND method IN ('photo-description','needs_photo_model')", (identifier,)).fetchone()),
+        bool(request.get("force_ocr"))))
     if not pages:
         raise ValueError("No readable pages")
     progress("Building keyword and citation index")
@@ -325,10 +384,11 @@ def ingest(db, request, scope, routes, work):
             cleanup = routes.get("cleanup") if method.startswith(("vision", "tesseract")) else None
             if cleanup and raw.strip() and len(raw) < 14000:
                 try:
-                    cleaned = post(cleanup, "chat/completions", {"model": cleanup["model"], "messages": [
-                        {"role": "system", "content": "Correct only obvious OCR errors. Return one line per original line, unchanged order and count. Preserve source identifiers and mark unclear words [illegible]."},
+                    cue = "Correct only obvious OCR errors. Return one line per original line, unchanged order and count. Preserve source identifiers and mark unclear words [illegible]."
+                    cleaned = response_value(post(cleanup, "chat/completions", {"model": cleanup["model"], "messages": [
+                        {"role": "system", "content": cue},
                         {"role": "user", "content": raw},
-                    ]})["choices"][0]["message"]["content"]
+                    ]}, {"text": raw, "prompt": cue}), cleanup, "choices.0.message.content")
                     original_lines, cleaned_lines = raw.splitlines(keepends=True), cleaned.splitlines()
                     if len(original_lines) == len(cleaned_lines):
                         # Preserve raw offsets and line positions. Extra predicted characters are not taken as evidence.
